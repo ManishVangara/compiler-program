@@ -9,7 +9,6 @@ import shutil
 import tempfile
 import signal
 import sys
-
 import openai
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException
@@ -43,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SUPPORTED_LANGUAGES = ["python", "c", "cpp", "java"]
+SUPPORTED_LANGUAGES = ["python", "c", "cpp", "java", "javascript", "perl","go"]
 MAX_CODE_SIZE = 10000
 MAX_EXECUTION_TIME = 5
 MAX_MEMORY_MB = 150
@@ -67,16 +66,19 @@ def extract_java_class_name(code: str) -> str:
 def validate_code_security(code: str) -> tuple[bool, str]:
     if len(code) > MAX_CODE_SIZE:
         return False, f"Code too large. Maximum {MAX_CODE_SIZE} characters allowed."
+    
     code_lower = code.lower()
     for keyword in FORBIDDEN_KEYWORDS:
         if re.search(r"\b" + re.escape(keyword), code_lower):
             return False, f"Security violation: '{keyword}' is not allowed."
+    
     suspicious_patterns = [
         r"__.*__", r"import\s+\*", r"exec\s*\(", r"eval\s*\(", r"__import__\s*\("
     ]
     for pattern in suspicious_patterns:
         if re.search(pattern, code_lower):
             return False, f"Security violation: Pattern '{pattern}' is not allowed."
+    
     dangerous_file_ops = [
         r"open\s*\([^)]*['\"][^'\"]*\.(py|exe|bat|cmd|sh|ps1)",
         r"open\s*\([^)]*['\"][^'\"]*\.(txt|log|ini|cfg|conf)",
@@ -86,6 +88,7 @@ def validate_code_security(code: str) -> tuple[bool, str]:
     for pattern in dangerous_file_ops:
         if re.search(pattern, code_lower):
             return False, "Security violation: Dangerous file operation detected."
+    
     return True, ""
 
 def set_resource_limits():
@@ -99,33 +102,86 @@ def set_resource_limits():
         pass
 
 def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=None):
+    """Execute command with timeout and memory tracking"""
     try:
         preexec_fn = set_resource_limits if HAS_RESOURCE and os.name != "nt" else None
-        kwargs = {"stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
-                  "stderr": subprocess.PIPE, "text": True, "cwd": temp_dir,
-                  "preexec_fn": preexec_fn}
+        kwargs = {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "cwd": temp_dir,
+            "preexec_fn": preexec_fn
+        }
         proc = subprocess.Popen(cmd, **kwargs)
-
+        
+        # Memory tracking
+        max_memory_mb = 0
+        start_time = time.time()
+        
         try:
-            stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
-            return type("Result", (), {"returncode": proc.returncode,
-                                       "stdout": stdout, "stderr": stderr})()
-        except subprocess.TimeoutExpired:
-            # Kill the process and children
+            # Monitor memory if psutil available
             if HAS_PSUTIL:
-                parent = psutil.Process(proc.pid)
-                for child in parent.children(recursive=True):
-                    child.kill()
-                parent.kill()
+                process = psutil.Process(proc.pid)
+                while proc.poll() is None:
+                    try:
+                        mem_info = process.memory_info()
+                        current_mem_mb = mem_info.rss / (1024 * 1024)
+                        max_memory_mb = max(max_memory_mb, current_mem_mb)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                    
+                    # Check timeout
+                    if time.time() - start_time > timeout:
+                        raise subprocess.TimeoutExpired(cmd, timeout)
+                    time.sleep(0.01)
+            
+            # Get output
+            stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+            execution_time = time.time() - start_time
+            
+            return {
+                "returncode": proc.returncode,
+                "stdout": stdout or "",
+                "stderr": stderr or "",
+                "time_sec": round(execution_time, 3),
+                "memory_mb": round(max_memory_mb, 2)
+            }
+            
+        except subprocess.TimeoutExpired:
+            # Kill process
+            if HAS_PSUTIL:
+                try:
+                    parent = psutil.Process(proc.pid)
+                    for child in parent.children(recursive=True):
+                        child.kill()
+                    parent.kill()
+                except:
+                    pass
             else:
                 if os.name != "nt":
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except:
+                        proc.kill()
                 else:
                     proc.kill()
-            return type("Result", (), {"returncode": -1,
-                                       "stdout": "", "stderr": "Timeout expired"})()
+            
+            return {
+                "returncode": -1,
+                "stdout": "",
+                "stderr": "Execution timeout - Process killed after {} seconds".format(timeout),
+                "time_sec": timeout,
+                "memory_mb": round(max_memory_mb, 2)
+            }
     except Exception as e:
-        return type("Result", (), {"returncode": -1, "stdout": "", "stderr": str(e)})()
+        return {
+            "returncode": -1,
+            "stdout": "",
+            "stderr": str(e),
+            "time_sec": 0,
+            "memory_mb": 0
+        }
 
 @app.post("/run")
 def run_code(req: CodeRequest):
@@ -133,38 +189,38 @@ def run_code(req: CodeRequest):
         lang = req.language.lower()
         if lang not in SUPPORTED_LANGUAGES:
             raise HTTPException(status_code=400, detail="Unsupported language")
-
+        
         is_safe, err = validate_code_security(req.code)
         if not is_safe:
             raise HTTPException(status_code=400, detail=err)
-
+        
         cleaned_code = sanitize_code(req.code)
+        
         if lang == "cpp" and "def " in cleaned_code:
             return {"error": "Language mismatch", "details": "Looks like Python but selected C++"}
         if lang == "python" and "#include" in cleaned_code:
             return {"error": "Language mismatch", "details": "Looks like C/C++ but selected Python"}
-
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             fid = uuid.uuid4().hex
             class_name = extract_java_class_name(cleaned_code) if lang == "java" else None
-
+            
             filename = {
                 "python": f"{fid}.py",
                 "c": f"{fid}.c",
                 "cpp": f"{fid}.cpp",
                 "java": f"{class_name}.java"
             }[lang]
-
+            
             src_path = os.path.join(temp_dir, filename)
             with open(src_path, "w", encoding="utf-8") as f:
                 f.write(cleaned_code)
-
+            
             exe_path = os.path.join(temp_dir, fid + (".exe" if os.name == "nt" else ""))
-
+            
             needs_input = bool(re.search(r"\b(input|scanf|cin|Scanner)\b", cleaned_code))
             nondet = any(tok in cleaned_code for tok in ("random","time(","datetime","now()","currentTimeMillis","Math.random"))
-
-            # Test cases
+            
             test_cases = []
             if req.auto_generate:
                 if nondet:
@@ -176,51 +232,51 @@ def run_code(req: CodeRequest):
                     inp = req.manual_cases[i]
                     exp = req.manual_cases[i+1] if i+1 < len(req.manual_cases) else ""
                     test_cases.append({"input": inp, "expected_output": exp})
-
-            # Compile if C/C++/Java
+            
             if lang in ("c","cpp"):
                 compiler = shutil.which("gcc") if lang=="c" else shutil.which("g++")
                 if not compiler:
                     return {"error": "Compiler not found", "details": f"{lang.upper()} compiler not installed"}
-                cp = run_with_timeout([compiler, src_path, "-o", exe_path], timeout=10)
-                if cp.returncode != 0:
-                    return {"error": "Compilation failed", "details": cp.stderr}
-
+                result = run_with_timeout([compiler, src_path, "-o", exe_path], timeout=10, temp_dir=temp_dir)
+                if result["returncode"] != 0:
+                    return {"error": "Compilation failed", "details": result["stderr"]}
             elif lang == "java":
-                cp = run_with_timeout(["javac", src_path], timeout=10)
-                if cp.returncode != 0:
-                    return {"error": "Compilation failed", "details": cp.stderr}
-
+                result = run_with_timeout(["javac", src_path], timeout=10, temp_dir=temp_dir)
+                if result["returncode"] != 0:
+                    return {"error": "Compilation failed", "details": result["stderr"]}
+            
             if not test_cases and not needs_input:
                 return {"language": lang, "raw_output": run_once(lang, src_path, exe_path, temp_dir, class_name)}
-
+            
             if not test_cases:
                 test_cases = [{"input": "", "expected_output": ""}]
-
+            
             results, passed, total_time = [], 0, 0.0
             for tc in test_cases:
                 inp = tc["input"].strip() + "\n" if needs_input else ""
                 exp = tc["expected_output"]
                 cmd = get_command(lang, src_path, exe_path, temp_dir, class_name)
-                start = time.time()
-                proc = run_with_timeout(cmd, inp, MAX_EXECUTION_TIME)
-                dur = round(time.time()-start,3)
-                actual = clean_output(proc.stdout)
+                result = run_with_timeout(cmd, inp, MAX_EXECUTION_TIME, temp_dir)
+                actual = clean_output(result["stdout"])
                 expected = clean_output(exp)
                 ok = "N/A" if nondet else (actual == expected)
                 if ok is True: passed+=1
-                results.append({"input": tc["input"], "expected_output": exp,
-                                "actual_output": actual, "passed": ok, "time": dur})
-
+                results.append({
+                    "input": tc["input"],
+                    "expected_output": exp,
+                    "actual_output": actual,
+                    "passed": ok,
+                    "time": f"{result['time_sec']}s",
+                    "memory": f"{result['memory_mb']}MB"
+                })
+            
             return {"language": lang, "total": len(results) if not nondet else "N/A",
                     "passed": passed if not nondet else "N/A",
                     "execution_time": round(total_time,3), "results": results}
-
     except Exception as e:
         traceback.print_exc()
         return {"error": "Internal server error", "details": str(e)}
 
-# --------- Utility Functions ---------
 def sanitize_code(code:str)->str:
     return code.replace("\u00a0"," ").replace("\u202f"," ").replace("\u200b","")
 
@@ -235,8 +291,8 @@ def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
 def run_once(lang, src_path, exe_path, temp_dir, class_name=None):
     cmd = get_command(lang, src_path, exe_path, temp_dir, class_name)
     proc = run_with_timeout(cmd, timeout=MAX_EXECUTION_TIME, temp_dir=temp_dir)
-    output = (proc.stdout or "").strip()
-    if proc.stderr: output+="\n"+proc.stderr.strip()
+    output = (proc["stdout"] or "").strip()
+    if proc["stderr"]: output+="\n"+proc["stderr"].strip()
     return output
 
 def clean_output(text:str)->str:

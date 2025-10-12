@@ -1,4 +1,4 @@
-fastapi==0.118.3
+fastapi
 openai==2.3.0
 psutil==7.1.0
 pydantic==2.12.0
