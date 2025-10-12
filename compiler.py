@@ -62,11 +62,11 @@ def extract_java_class_name(code: str) -> str:
     return match.group(1) if match else "Main"
 
 def extract_go_package_name(code: str) -> str:
-    """Extract package name from Go code, default to 'main'"""
     match = re.search(r"package\s+(\w+)", code)
     return match.group(1) if match else "main"
 
-def validate_code_security(code: str) -> tuple[bool, str]:
+def validate_code_security(code: str, language: str = "python") -> tuple[bool, str]:
+    """Validate code for security threats - language-aware"""
     if len(code) > MAX_CODE_SIZE:
         return False, f"Code too large. Maximum {MAX_CODE_SIZE} characters allowed."
     
@@ -188,16 +188,30 @@ def run_code(req: CodeRequest):
         if lang not in SUPPORTED_LANGUAGES:
             raise HTTPException(status_code=400, detail="Unsupported language")
         
-        is_safe, err = validate_code_security(req.code)
+        is_safe, err = validate_code_security(req.code, lang)
         if not is_safe:
             raise HTTPException(status_code=400, detail=err)
         
         cleaned_code = sanitize_code(req.code)
         
-        if lang == "cpp" and "def " in cleaned_code:
-            return {"error": "Language mismatch", "details": "Looks like Python but selected C++"}
-        if lang == "python" and "#include" in cleaned_code:
-            return {"error": "Language mismatch", "details": "Looks like C/C++ but selected Python"}
+        # Enhanced language mismatch detection
+        language_signatures = {
+            "python": ["def ", "import ", "print("],
+            "cpp": ["#include", "std::", "cout"],
+            "c": ["#include", "printf"],
+            "java": ["public class", "public static void main"],
+            "javascript": ["console.log", "function ", "const ", "let ", "var "],
+            "perl": ["use ", "my $", "print "],
+            "go": ["package ", "func ", "import "]
+        }
+        
+        for detect_lang, signatures in language_signatures.items():
+            if detect_lang != lang:
+                if any(sig in cleaned_code for sig in signatures[:2]):
+                    return {
+                        "error": "Language mismatch",
+                        "details": f"Code looks like {detect_lang.upper()} but {lang.upper()} was selected"
+                    }
         
         with tempfile.TemporaryDirectory() as temp_dir:
             fid = uuid.uuid4().hex
@@ -219,7 +233,19 @@ def run_code(req: CodeRequest):
             
             exe_path = os.path.join(temp_dir, fid + (".exe" if os.name == "nt" else ""))
             
-            needs_input = bool(re.search(r"\b(input|scanf|cin|Scanner)\b", cleaned_code))
+            # Language-specific input detection
+            input_patterns = {
+                "python": r"\b(input|raw_input)\s*\(",
+                "c": r"\b(scanf|gets|getchar|fgets)\s*\(",
+                "cpp": r"\b(cin|scanf|gets|getline)\b",
+                "java": r"\b(Scanner|BufferedReader|System\.in)\b",
+                "javascript": r"\b(readline|prompt|process\.stdin)\b",
+                "perl": r"\b(<STDIN>|<>|readline)\b",
+                "go": r"\b(fmt\.Scan|bufio\.NewReader|os\.Stdin)\b"
+            }
+            pattern = input_patterns.get(lang, r"\b(input|scanf|cin|Scanner)\b")
+            needs_input = bool(re.search(pattern, cleaned_code))
+            
             nondet = any(tok in cleaned_code for tok in ("random","time(","datetime","now()","currentTimeMillis","Math.random"))
             
             test_cases = []
@@ -243,6 +269,9 @@ def run_code(req: CodeRequest):
                 if result["returncode"] != 0:
                     return {"error": "Compilation failed", "details": result["stderr"]}
             elif lang == "java":
+                javac = shutil.which("javac")
+                if not javac:
+                    return {"error": "Compiler not found", "details": "Java compiler (javac) not found"}
                 result = run_with_timeout(["javac", src_path], timeout=10, temp_dir=temp_dir)
                 if result["returncode"] != 0:
                     return {"error": "Compilation failed", "details": result["stderr"]}
@@ -296,7 +325,6 @@ def sanitize_code(code:str)->str:
     return code.replace("\u00a0"," ").replace("\u202f"," ").replace("\u200b","")
 
 def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
-    """Generate the command to execute code based on language"""
     if lang == "python":
         return [sys.executable, "-u", "-E", "-S", src_path]
     elif lang == "javascript":
@@ -326,7 +354,8 @@ def generate_test_cases(code:str, language:str)->List[dict]:
     prompt = f"""
 You are a test case generator. Given this {language.upper()} code, return exactly 2 test cases in JSON format:
 [{{"input":"...","expected_output":"..."}},{{"input":"...","expected_output":"..."}}]
-If the code has no input(), leave "input" empty. Only return valid JSON.
+If the code has no input() or scanf() or similar input function, leave "input" empty.
+Only return valid JSON array, nothing else.
 Code:
 {code}
 """
