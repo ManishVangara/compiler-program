@@ -66,7 +66,6 @@ def extract_go_package_name(code: str) -> str:
     return match.group(1) if match else "main"
 
 def validate_code_security(code: str, language: str = "python") -> tuple[bool, str]:
-    """Validate code for security threats - language-aware"""
     if len(code) > MAX_CODE_SIZE:
         return False, f"Code too large. Maximum {MAX_CODE_SIZE} characters allowed."
     
@@ -181,6 +180,24 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
             "memory_mb": 0
         }
 
+def build_standard_response(result, language):
+    """Build standardized response format"""
+    if result["returncode"] == 0:
+        status = "success"
+    elif result["returncode"] == -1:
+        status = "timeout" if "timeout" in result["stderr"].lower() else "error"
+    else:
+        status = "runtime_error"
+    
+    return {
+        "stdout": result["stdout"],
+        "stderr": result["stderr"],
+        "status": status,
+        "time": f"{result['time_sec']}s",
+        "memory": f"{result['memory_mb']}MB",
+        "language": language
+    }
+
 @app.post("/run")
 def run_code(req: CodeRequest):
     try:
@@ -194,7 +211,7 @@ def run_code(req: CodeRequest):
         
         cleaned_code = sanitize_code(req.code)
         
-        # Enhanced language mismatch detection
+        # Language mismatch detection
         language_signatures = {
             "python": ["def ", "import ", "print("],
             "cpp": ["#include", "std::", "cout"],
@@ -209,8 +226,12 @@ def run_code(req: CodeRequest):
             if detect_lang != lang:
                 if any(sig in cleaned_code for sig in signatures[:2]):
                     return {
-                        "error": "Language mismatch",
-                        "details": f"Code looks like {detect_lang.upper()} but {lang.upper()} was selected"
+                        "stdout": "",
+                        "stderr": f"Code looks like {detect_lang.upper()} but {lang.upper()} was selected",
+                        "status": "error",
+                        "time": "0s",
+                        "memory": "0MB",
+                        "language": lang
                     }
         
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -233,7 +254,6 @@ def run_code(req: CodeRequest):
             
             exe_path = os.path.join(temp_dir, fid + (".exe" if os.name == "nt" else ""))
             
-            # Language-specific input detection
             input_patterns = {
                 "python": r"\b(input|raw_input)\s*\(",
                 "c": r"\b(scanf|gets|getchar|fgets)\s*\(",
@@ -251,8 +271,15 @@ def run_code(req: CodeRequest):
             test_cases = []
             if req.auto_generate:
                 if nondet:
-                    return {"warning": "Code contains randomness, skipping test validation.",
-                            "raw_output": run_once(lang, src_path, exe_path, temp_dir, class_name)}
+                    return {
+                        "stdout": "",
+                        "stderr": "Code contains randomness, skipping test validation.",
+                        "status": "warning",
+                        "time": "0s",
+                        "memory": "0MB",
+                        "language": lang,
+                        "raw_output": run_once(lang, src_path, exe_path, temp_dir, class_name)
+                    }
                 test_cases = generate_test_cases(cleaned_code, lang)
             elif req.manual_cases:
                 for i in range(0, len(req.manual_cases or []), 2):
@@ -264,33 +291,90 @@ def run_code(req: CodeRequest):
             if lang in ("c", "cpp"):
                 compiler = shutil.which("gcc") if lang == "c" else shutil.which("g++")
                 if not compiler:
-                    return {"error": "Compiler not found", "details": f"{lang.upper()} compiler not installed"}
+                    return {
+                        "stdout": "",
+                        "stderr": f"{lang.upper()} compiler not found",
+                        "status": "error",
+                        "time": "0s",
+                        "memory": "0MB",
+                        "language": lang
+                    }
                 result = run_with_timeout([compiler, src_path, "-o", exe_path], timeout=10, temp_dir=temp_dir)
                 if result["returncode"] != 0:
-                    return {"error": "Compilation failed", "details": result["stderr"]}
+                    return {
+                        "stdout": "",
+                        "stderr": result["stderr"],
+                        "status": "compilation_failed",
+                        "time": f"{result['time_sec']}s",
+                        "memory": f"{result['memory_mb']}MB",
+                        "language": lang
+                    }
             elif lang == "java":
                 javac = shutil.which("javac")
                 if not javac:
-                    return {"error": "Compiler not found", "details": "Java compiler (javac) not found"}
+                    return {
+                        "stdout": "",
+                        "stderr": "Java compiler (javac) not found",
+                        "status": "error",
+                        "time": "0s",
+                        "memory": "0MB",
+                        "language": lang
+                    }
                 result = run_with_timeout(["javac", src_path], timeout=10, temp_dir=temp_dir)
                 if result["returncode"] != 0:
-                    return {"error": "Compilation failed", "details": result["stderr"]}
+                    return {
+                        "stdout": "",
+                        "stderr": result["stderr"],
+                        "status": "compilation_failed",
+                        "time": f"{result['time_sec']}s",
+                        "memory": f"{result['memory_mb']}MB",
+                        "language": lang
+                    }
             elif lang == "go":
                 go_compiler = shutil.which("go")
                 if not go_compiler:
-                    return {"error": "Compiler not found", "details": "Go compiler not installed"}
+                    return {
+                        "stdout": "",
+                        "stderr": "Go compiler not found",
+                        "status": "error",
+                        "time": "0s",
+                        "memory": "0MB",
+                        "language": lang
+                    }
                 result = run_with_timeout(["go", "build", "-o", exe_path, src_path], timeout=10, temp_dir=temp_dir)
                 if result["returncode"] != 0:
-                    return {"error": "Compilation failed", "details": result["stderr"]}
+                    return {
+                        "stdout": "",
+                        "stderr": result["stderr"],
+                        "status": "compilation_failed",
+                        "time": f"{result['time_sec']}s",
+                        "memory": f"{result['memory_mb']}MB",
+                        "language": lang
+                    }
             elif lang == "javascript":
                 if not shutil.which("node"):
-                    return {"error": "Runtime not found", "details": "Node.js not installed"}
+                    return {
+                        "stdout": "",
+                        "stderr": "Node.js not installed",
+                        "status": "error",
+                        "time": "0s",
+                        "memory": "0MB",
+                        "language": lang
+                    }
             elif lang == "perl":
                 if not shutil.which("perl"):
-                    return {"error": "Runtime not found", "details": "Perl interpreter not installed"}
+                    return {
+                        "stdout": "",
+                        "stderr": "Perl interpreter not installed",
+                        "status": "error",
+                        "time": "0s",
+                        "memory": "0MB",
+                        "language": lang
+                    }
             
+            # Execute code
             if not test_cases and not needs_input:
-                return {"language": lang, "raw_output": run_once(lang, src_path, exe_path, temp_dir, class_name)}
+                return run_once(lang, src_path, exe_path, temp_dir, class_name)
             
             if not test_cases:
                 test_cases = [{"input": "", "expected_output": ""}]
@@ -314,12 +398,42 @@ def run_code(req: CodeRequest):
                     "memory": f"{result['memory_mb']}MB"
                 })
             
-            return {"language": lang, "total": len(results) if not nondet else "N/A",
+            total_time = sum(float(r['time'].rstrip('s')) for r in results)
+            max_memory = max(float(r['memory'].rstrip('MB')) for r in results)
+            
+            return {
+                "stdout": "",
+                "stderr": "",
+                "status": "success",
+                "time": f"{round(total_time, 3)}s",
+                "memory": f"{round(max_memory, 2)}MB",
+                "language": lang,
+                "test_results": results,
+                "summary": {
+                    "total": len(results) if not nondet else "N/A",
                     "passed": passed if not nondet else "N/A",
-                    "results": results}
+                    "failed": len(results) - passed if not nondet else "N/A"
+                }
+            }
+    except HTTPException as he:
+        return {
+            "stdout": "",
+            "stderr": str(he.detail),
+            "status": "error",
+            "time": "0s",
+            "memory": "0MB",
+            "language": req.language
+        }
     except Exception as e:
         traceback.print_exc()
-        return {"error": "Internal server error", "details": str(e)}
+        return {
+            "stdout": "",
+            "stderr": f"Internal server error: {str(e)}",
+            "status": "error",
+            "time": "0s",
+            "memory": "0MB",
+            "language": req.language
+        }
 
 def sanitize_code(code:str)->str:
     return code.replace("\u00a0"," ").replace("\u202f"," ").replace("\u200b","")
@@ -341,18 +455,17 @@ def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
         raise ValueError(f"Unsupported language: {lang}")
 
 def run_once(lang, src_path, exe_path, temp_dir, class_name=None):
+    """Execute code once and return standardized result"""
     cmd = get_command(lang, src_path, exe_path, temp_dir, class_name)
-    proc = run_with_timeout(cmd, timeout=MAX_EXECUTION_TIME, temp_dir=temp_dir)
-    output = (proc["stdout"] or "").strip()
-    if proc["stderr"]: output+="\n"+proc["stderr"].strip()
-    return output
+    result = run_with_timeout(cmd, timeout=MAX_EXECUTION_TIME, temp_dir=temp_dir)
+    return build_standard_response(result, lang)
 
 def clean_output(text:str)->str:
     return re.sub(r"Enter\s+[^:]*:\s*","", text, flags=re.I).strip()
 
 def generate_test_cases(code:str, language:str)->List[dict]:
     prompt = f"""
-You are a test case generator. Given this {language.upper()} code, return exactly 2 test cases in JSON format:
+You are a test case generator. Given this {language.UPPER()} code, return exactly 2 test cases in JSON format:
 [{{"input":"...","expected_output":"..."}},{{"input":"...","expected_output":"..."}}]
 If the code has no input() or scanf() or similar input function, leave "input" empty.
 Only return valid JSON array, nothing else.
