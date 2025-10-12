@@ -16,11 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Optional modules
 try:
     import resource
     HAS_RESOURCE = True
@@ -42,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SUPPORTED_LANGUAGES = ["python", "c", "cpp", "java", "javascript", "perl","go"]
+SUPPORTED_LANGUAGES = ["python", "c", "cpp", "java", "javascript", "perl", "go"]
 MAX_CODE_SIZE = 10000
 MAX_EXECUTION_TIME = 5
 MAX_MEMORY_MB = 150
@@ -62,6 +60,11 @@ class CodeRequest(BaseModel):
 def extract_java_class_name(code: str) -> str:
     match = re.search(r"(?:public\s+)?class\s+(\w+)", code)
     return match.group(1) if match else "Main"
+
+def extract_go_package_name(code: str) -> str:
+    """Extract package name from Go code, default to 'main'"""
+    match = re.search(r"package\s+(\w+)", code)
+    return match.group(1) if match else "main"
 
 def validate_code_security(code: str) -> tuple[bool, str]:
     if len(code) > MAX_CODE_SIZE:
@@ -115,12 +118,10 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
         }
         proc = subprocess.Popen(cmd, **kwargs)
         
-        # Memory tracking
         max_memory_mb = 0
         start_time = time.time()
         
         try:
-            # Monitor memory if psutil available
             if HAS_PSUTIL:
                 process = psutil.Process(proc.pid)
                 while proc.poll() is None:
@@ -131,12 +132,10 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
                     
-                    # Check timeout
                     if time.time() - start_time > timeout:
                         raise subprocess.TimeoutExpired(cmd, timeout)
                     time.sleep(0.01)
             
-            # Get output
             stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
             execution_time = time.time() - start_time
             
@@ -149,7 +148,6 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
             }
             
         except subprocess.TimeoutExpired:
-            # Kill process
             if HAS_PSUTIL:
                 try:
                     parent = psutil.Process(proc.pid)
@@ -209,7 +207,10 @@ def run_code(req: CodeRequest):
                 "python": f"{fid}.py",
                 "c": f"{fid}.c",
                 "cpp": f"{fid}.cpp",
-                "java": f"{class_name}.java"
+                "java": f"{class_name}.java",
+                "javascript": f"{fid}.js",
+                "perl": f"{fid}.pl",
+                "go": f"{fid}.go"
             }[lang]
             
             src_path = os.path.join(temp_dir, filename)
@@ -233,8 +234,9 @@ def run_code(req: CodeRequest):
                     exp = req.manual_cases[i+1] if i+1 < len(req.manual_cases) else ""
                     test_cases.append({"input": inp, "expected_output": exp})
             
-            if lang in ("c","cpp"):
-                compiler = shutil.which("gcc") if lang=="c" else shutil.which("g++")
+            # Compile if needed
+            if lang in ("c", "cpp"):
+                compiler = shutil.which("gcc") if lang == "c" else shutil.which("g++")
                 if not compiler:
                     return {"error": "Compiler not found", "details": f"{lang.upper()} compiler not installed"}
                 result = run_with_timeout([compiler, src_path, "-o", exe_path], timeout=10, temp_dir=temp_dir)
@@ -244,6 +246,19 @@ def run_code(req: CodeRequest):
                 result = run_with_timeout(["javac", src_path], timeout=10, temp_dir=temp_dir)
                 if result["returncode"] != 0:
                     return {"error": "Compilation failed", "details": result["stderr"]}
+            elif lang == "go":
+                go_compiler = shutil.which("go")
+                if not go_compiler:
+                    return {"error": "Compiler not found", "details": "Go compiler not installed"}
+                result = run_with_timeout(["go", "build", "-o", exe_path, src_path], timeout=10, temp_dir=temp_dir)
+                if result["returncode"] != 0:
+                    return {"error": "Compilation failed", "details": result["stderr"]}
+            elif lang == "javascript":
+                if not shutil.which("node"):
+                    return {"error": "Runtime not found", "details": "Node.js not installed"}
+            elif lang == "perl":
+                if not shutil.which("perl"):
+                    return {"error": "Runtime not found", "details": "Perl interpreter not installed"}
             
             if not test_cases and not needs_input:
                 return {"language": lang, "raw_output": run_once(lang, src_path, exe_path, temp_dir, class_name)}
@@ -251,7 +266,7 @@ def run_code(req: CodeRequest):
             if not test_cases:
                 test_cases = [{"input": "", "expected_output": ""}]
             
-            results, passed, total_time = [], 0, 0.0
+            results, passed = [], 0
             for tc in test_cases:
                 inp = tc["input"].strip() + "\n" if needs_input else ""
                 exp = tc["expected_output"]
@@ -272,7 +287,7 @@ def run_code(req: CodeRequest):
             
             return {"language": lang, "total": len(results) if not nondet else "N/A",
                     "passed": passed if not nondet else "N/A",
-                    "execution_time": round(total_time,3), "results": results}
+                    "results": results}
     except Exception as e:
         traceback.print_exc()
         return {"error": "Internal server error", "details": str(e)}
@@ -281,12 +296,21 @@ def sanitize_code(code:str)->str:
     return code.replace("\u00a0"," ").replace("\u202f"," ").replace("\u200b","")
 
 def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
-    if lang=="python":
-        return [sys.executable,"-u","-E","-S",src_path]
-    if lang in ("c","cpp"):
+    """Generate the command to execute code based on language"""
+    if lang == "python":
+        return [sys.executable, "-u", "-E", "-S", src_path]
+    elif lang == "javascript":
+        return ["node", src_path]
+    elif lang == "perl":
+        return ["perl", src_path]
+    elif lang == "go":
         return [exe_path]
-    if lang=="java":
-        return ["java","-cp",tmp_dir,class_name]
+    elif lang in ("c", "cpp"):
+        return [exe_path]
+    elif lang == "java":
+        return ["java", "-cp", tmp_dir, class_name]
+    else:
+        raise ValueError(f"Unsupported language: {lang}")
 
 def run_once(lang, src_path, exe_path, temp_dir, class_name=None):
     cmd = get_command(lang, src_path, exe_path, temp_dir, class_name)
