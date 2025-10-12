@@ -16,9 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+# Optional modules
 try:
     import resource
     HAS_RESOURCE = True
@@ -45,6 +47,7 @@ MAX_CODE_SIZE = 10000
 MAX_EXECUTION_TIME = 5
 MAX_MEMORY_MB = 150
 
+# Keep base forbidden keywords (Python-focused)
 FORBIDDEN_KEYWORDS = [
     "import os", "import sys", "import subprocess", "import shutil",
     "system(", "exec(", "eval(", "open(", "file(", "__import__",
@@ -62,18 +65,23 @@ def extract_java_class_name(code: str) -> str:
     return match.group(1) if match else "Main"
 
 def extract_go_package_name(code: str) -> str:
+    """Extract package name from Go code, default to 'main'"""
     match = re.search(r"package\s+(\w+)", code)
     return match.group(1) if match else "main"
 
 def validate_code_security(code: str, language: str = "python") -> tuple[bool, str]:
+    """Validate code for security threats - basic checks only"""
     if len(code) > MAX_CODE_SIZE:
         return False, f"Code too large. Maximum {MAX_CODE_SIZE} characters allowed."
     
     code_lower = code.lower()
+    
+    # Check base forbidden keywords only
     for keyword in FORBIDDEN_KEYWORDS:
         if re.search(r"\b" + re.escape(keyword), code_lower):
             return False, f"Security violation: '{keyword}' is not allowed."
     
+    # Keep suspicious patterns check
     suspicious_patterns = [
         r"__.*__", r"import\s+\*", r"exec\s*\(", r"eval\s*\(", r"__import__\s*\("
     ]
@@ -81,6 +89,7 @@ def validate_code_security(code: str, language: str = "python") -> tuple[bool, s
         if re.search(pattern, code_lower):
             return False, f"Security violation: Pattern '{pattern}' is not allowed."
     
+    # Keep dangerous file operations check
     dangerous_file_ops = [
         r"open\s*\([^)]*['\"][^'\"]*\.(py|exe|bat|cmd|sh|ps1)",
         r"open\s*\([^)]*['\"][^'\"]*\.(txt|log|ini|cfg|conf)",
@@ -104,7 +113,7 @@ def set_resource_limits():
         pass
 
 def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=None):
-    """Execute command with timeout and memory tracking"""
+    """Execute command with timeout and memory tracking - PHASE 2"""
     try:
         preexec_fn = set_resource_limits if HAS_RESOURCE and os.name != "nt" else None
         kwargs = {
@@ -117,10 +126,12 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
         }
         proc = subprocess.Popen(cmd, **kwargs)
         
+        # Memory tracking
         max_memory_mb = 0
         start_time = time.time()
         
         try:
+            # Monitor memory if psutil available
             if HAS_PSUTIL:
                 process = psutil.Process(proc.pid)
                 while proc.poll() is None:
@@ -131,10 +142,12 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
                     
+                    # Check timeout
                     if time.time() - start_time > timeout:
                         raise subprocess.TimeoutExpired(cmd, timeout)
                     time.sleep(0.01)
             
+            # Get output
             stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
             execution_time = time.time() - start_time
             
@@ -147,6 +160,7 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
             }
             
         except subprocess.TimeoutExpired:
+            # Kill process
             if HAS_PSUTIL:
                 try:
                     parent = psutil.Process(proc.pid)
@@ -181,7 +195,7 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
         }
 
 def build_standard_response(result, language):
-    """Build standardized response format"""
+    """Build standardized response format - PHASE 2"""
     if result["returncode"] == 0:
         status = "success"
     elif result["returncode"] == -1:
@@ -254,6 +268,7 @@ def run_code(req: CodeRequest):
             
             exe_path = os.path.join(temp_dir, fid + (".exe" if os.name == "nt" else ""))
             
+            # Detect if code needs input
             input_patterns = {
                 "python": r"\b(input|raw_input)\s*\(",
                 "c": r"\b(scanf|gets|getchar|fgets)\s*\(",
@@ -266,8 +281,9 @@ def run_code(req: CodeRequest):
             pattern = input_patterns.get(lang, r"\b(input|scanf|cin|Scanner)\b")
             needs_input = bool(re.search(pattern, cleaned_code))
             
-            nondet = any(tok in cleaned_code for tok in ("random","time(","datetime","now()","currentTimeMillis","Math.random"))
+            nondet = any(tok in cleaned_code for tok in ("random", "time(", "datetime", "now()", "currentTimeMillis", "Math.random"))
             
+            # Test cases
             test_cases = []
             if req.auto_generate:
                 if nondet:
@@ -379,6 +395,7 @@ def run_code(req: CodeRequest):
             if not test_cases:
                 test_cases = [{"input": "", "expected_output": ""}]
             
+            # Execute with test cases
             results, passed = [], 0
             for tc in test_cases:
                 inp = tc["input"].strip() + "\n" if needs_input else ""
@@ -388,7 +405,8 @@ def run_code(req: CodeRequest):
                 actual = clean_output(result["stdout"])
                 expected = clean_output(exp)
                 ok = "N/A" if nondet else (actual == expected)
-                if ok is True: passed+=1
+                if ok is True:
+                    passed += 1
                 results.append({
                     "input": tc["input"],
                     "expected_output": exp,
@@ -435,10 +453,12 @@ def run_code(req: CodeRequest):
             "language": req.language
         }
 
-def sanitize_code(code:str)->str:
-    return code.replace("\u00a0"," ").replace("\u202f"," ").replace("\u200b","")
+# --------- Utility Functions ---------
+def sanitize_code(code: str) -> str:
+    return code.replace("\u00a0", " ").replace("\u202f", " ").replace("\u200b", "")
 
 def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
+    """Generate the command to execute code based on language"""
     if lang == "python":
         return [sys.executable, "-u", "-E", "-S", src_path]
     elif lang == "javascript":
@@ -455,17 +475,21 @@ def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
         raise ValueError(f"Unsupported language: {lang}")
 
 def run_once(lang, src_path, exe_path, temp_dir, class_name=None):
-    """Execute code once and return standardized result"""
+    """Execute code once and return standardized result - PHASE 2"""
     cmd = get_command(lang, src_path, exe_path, temp_dir, class_name)
     result = run_with_timeout(cmd, timeout=MAX_EXECUTION_TIME, temp_dir=temp_dir)
     return build_standard_response(result, lang)
 
-def clean_output(text:str)->str:
-    return re.sub(r"Enter\s+[^:]*:\s*","", text, flags=re.I).strip()
+def clean_output(text: str) -> str:
+    return re.sub(r"Enter\s+[^:]*:\s*", "", text, flags=re.I).strip()
 
-def generate_test_cases(code:str, language:str)->List[dict]:
+def generate_test_cases(code: str, language: str) -> List[dict]:
+    """
+    AI-powered test case generator using OpenAI GPT-4
+    Generates test cases based on code analysis
+    """
     prompt = f"""
-You are a test case generator. Given this {language.UPPER()} code, return exactly 2 test cases in JSON format:
+You are a test case generator. Given this {language.upper()} code, return exactly 2 test cases in JSON format:
 [{{"input":"...","expected_output":"..."}},{{"input":"...","expected_output":"..."}}]
 If the code has no input() or scanf() or similar input function, leave "input" empty.
 Only return valid JSON array, nothing else.
@@ -475,10 +499,21 @@ Code:
     try:
         resp = openai.chat.completions.create(
             model="gpt-4",
-            messages=[{"role":"user","content":prompt}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             request_timeout=10
         )
-        return json.loads(resp.choices[0].message.content.strip())
-    except Exception:
-        return [{"input":"","expected_output":""}]
+        content = resp.choices[0].message.content.strip()
+        
+        # Try to extract JSON from response
+        # Sometimes GPT returns markdown code blocks
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        
+        return json.loads(content)
+    except Exception as e:
+        print(f"OpenAI test generation failed: {str(e)}")
+        # Return default empty test case if OpenAI fails
+        return [{"input": "", "expected_output": ""}]
