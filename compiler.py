@@ -113,78 +113,49 @@ def set_resource_limits():
         pass
 
 def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=None):
-    """Execute command with timeout and memory tracking - PHASE 2"""
+    """Execute command with timeout - FIXED VERSION"""
     try:
         preexec_fn = set_resource_limits if HAS_RESOURCE and os.name != "nt" else None
-        kwargs = {
-            "stdin": subprocess.PIPE,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "text": True,
-            "cwd": temp_dir,
-            "preexec_fn": preexec_fn
-        }
-        proc = subprocess.Popen(cmd, **kwargs)
         
-        # Memory tracking
-        max_memory_mb = 0
         start_time = time.time()
         
-        try:
-            # Monitor memory if psutil available
-            if HAS_PSUTIL:
-                process = psutil.Process(proc.pid)
-                while proc.poll() is None:
-                    try:
-                        mem_info = process.memory_info()
-                        current_mem_mb = mem_info.rss / (1024 * 1024)
-                        max_memory_mb = max(max_memory_mb, current_mem_mb)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        pass
-                    
-                    # Check timeout
-                    if time.time() - start_time > timeout:
-                        raise subprocess.TimeoutExpired(cmd, timeout)
-                    time.sleep(0.01)
-            
-            # Get output
-            stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
-            execution_time = time.time() - start_time
-            
-            return {
-                "returncode": proc.returncode,
-                "stdout": stdout or "",
-                "stderr": stderr or "",
-                "time_sec": round(execution_time, 3),
-                "memory_mb": round(max_memory_mb, 2)
-            }
-            
-        except subprocess.TimeoutExpired:
-            # Kill process
-            if HAS_PSUTIL:
-                try:
-                    parent = psutil.Process(proc.pid)
-                    for child in parent.children(recursive=True):
-                        child.kill()
-                    parent.kill()
-                except:
-                    pass
-            else:
-                if os.name != "nt":
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except:
-                        proc.kill()
-                else:
-                    proc.kill()
-            
-            return {
-                "returncode": -1,
-                "stdout": "",
-                "stderr": "Execution timeout - Process killed after {} seconds".format(timeout),
-                "time_sec": timeout,
-                "memory_mb": round(max_memory_mb, 2)
-            }
+        # CRITICAL FIX: Ensure input ends with newline if it has content
+        # but don't double-add if it already ends with newline
+        if input_data and not input_data.endswith('\n'):
+            input_data = input_data + '\n'
+        
+        # Run process and wait for completion with input
+        result = subprocess.run(
+            cmd,
+            input=input_data,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=temp_dir,
+            preexec_fn=preexec_fn
+        )
+        
+        execution_time = time.time() - start_time
+        
+        # Memory tracking for completed process is not reliable
+        max_memory_mb = 0
+        
+        return {
+            "returncode": result.returncode,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "time_sec": round(execution_time, 3),
+            "memory_mb": round(max_memory_mb, 2)
+        }
+        
+    except subprocess.TimeoutExpired as e:
+        return {
+            "returncode": -1,
+            "stdout": e.stdout or "",
+            "stderr": f"Execution timeout - Process killed after {timeout} seconds",
+            "time_sec": timeout,
+            "memory_mb": 0
+        }
     except Exception as e:
         return {
             "returncode": -1,
@@ -195,7 +166,7 @@ def run_with_timeout(cmd, input_data="", timeout=MAX_EXECUTION_TIME, temp_dir=No
         }
 
 def build_standard_response(result, language):
-    """Build standardized response format - PHASE 2"""
+    """Build standardized response format"""
     if result["returncode"] == 0:
         status = "success"
     elif result["returncode"] == -1:
@@ -278,6 +249,7 @@ def run_code(req: CodeRequest):
                 "perl": r"\b(<STDIN>|<>|readline)\b",
                 "go": r"\b(fmt\.Scan|bufio\.NewReader|os\.Stdin)\b"
             }
+            
             pattern = input_patterns.get(lang, r"\b(input|scanf|cin|Scanner)\b")
             needs_input = bool(re.search(pattern, cleaned_code))
             
@@ -398,15 +370,22 @@ def run_code(req: CodeRequest):
             # Execute with test cases
             results, passed = [], 0
             for tc in test_cases:
-                inp = tc["input"].strip() + "\n" if needs_input else ""
+                # CRITICAL FIX: Ensure input ends with newline for proper EOF handling
+                inp = tc["input"] if needs_input else ""
+                if inp and not inp.endswith('\n'):
+                    inp = inp + '\n'
                 exp = tc["expected_output"]
+                
                 cmd = get_command(lang, src_path, exe_path, temp_dir, class_name)
                 result = run_with_timeout(cmd, inp, MAX_EXECUTION_TIME, temp_dir)
+                
                 actual = clean_output(result["stdout"])
                 expected = clean_output(exp)
+                
                 ok = "N/A" if nondet else (actual == expected)
                 if ok is True:
                     passed += 1
+                
                 results.append({
                     "input": tc["input"],
                     "expected_output": exp,
@@ -433,6 +412,7 @@ def run_code(req: CodeRequest):
                     "failed": len(results) - passed if not nondet else "N/A"
                 }
             }
+    
     except HTTPException as he:
         return {
             "stdout": "",
@@ -452,15 +432,251 @@ def run_code(req: CodeRequest):
             "memory": "0MB",
             "language": req.language
         }
+"""
+Add this complete debug endpoint to your FastAPI app
+Add it right after your existing @app.post("/run") endpoint
+"""
+### Debug Endpoint ###
+@app.post("/debug-run")
+def debug_run_code(req: CodeRequest):
+    """Debug version with extensive logging - returns diagnostic info"""
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
+    
+    debug_info = {
+        "steps": [],
+        "test_results": []
+    }
+    
+    try:
+        lang = req.language.lower()
+        debug_info["steps"].append(f"Language: {lang}")
+        
+        # Sanitize code
+        cleaned_code = req.code.replace("\u00a0", " ").replace("\u202f", " ").replace("\u200b", "")
+        debug_info["steps"].append(f"Code length: {len(cleaned_code)} chars")
+        debug_info["code_preview"] = cleaned_code[:200] + "..." if len(cleaned_code) > 200 else cleaned_code
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fid = uuid.uuid4().hex
+            filename = f"{fid}.py"
+            src_path = os.path.join(temp_dir, filename)
+            
+            # Write code to file
+            with open(src_path, "w", encoding="utf-8") as f:
+                f.write(cleaned_code)
+            
+            debug_info["steps"].append(f"Code written to: {src_path}")
+            
+            # Parse test cases
+            test_cases = []
+            for i in range(0, len(req.manual_cases or []), 2):
+                inp = req.manual_cases[i]
+                exp = req.manual_cases[i+1] if i+1 < len(req.manual_cases) else ""
+                test_cases.append({"input": inp, "expected_output": exp})
+            
+            debug_info["steps"].append(f"Parsed {len(test_cases)} test cases")
+            debug_info["test_cases"] = test_cases
+            
+            if not test_cases:
+                return {
+                    "error": "No test cases provided",
+                    "debug_info": debug_info
+                }
+            
+            # Test each case
+            for idx, tc in enumerate(test_cases):
+                test_debug = {
+                    "test_number": idx + 1,
+                    "input_raw": repr(tc["input"]),
+                    "expected": tc["expected_output"],
+                    "methods": []
+                }
+                
+                inp = tc["input"]
+                
+                # Ensure ends with newline
+                if inp and not inp.endswith('\n'):
+                    inp = inp + '\n'
+                
+                test_debug["input_processed"] = repr(inp)
+                test_debug["input_bytes"] = list(inp.encode('utf-8'))
+                
+                cmd = [sys.executable, "-u", src_path]
+                test_debug["command"] = cmd
+                
+                # METHOD 1: subprocess.run
+                method1 = {"name": "subprocess.run"}
+                try:
+                    start = time.time()
+                    result = subprocess.run(
+                        cmd,
+                        input=inp,
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                        cwd=temp_dir
+                    )
+                    elapsed = time.time() - start
+                    
+                    method1["success"] = True
+                    method1["time"] = f"{elapsed:.3f}s"
+                    method1["returncode"] = result.returncode
+                    method1["stdout"] = result.stdout
+                    method1["stderr"] = result.stderr
+                    method1["matched"] = result.stdout.strip() == tc["expected_output"].strip()
+                    
+                except subprocess.TimeoutExpired as e:
+                    method1["success"] = False
+                    method1["error"] = "TIMEOUT after 2s"
+                    method1["partial_stdout"] = e.stdout
+                    method1["partial_stderr"] = e.stderr
+                except Exception as e:
+                    method1["success"] = False
+                    method1["error"] = str(e)
+                
+                test_debug["methods"].append(method1)
+                
+                # METHOD 2: Popen with stdin.write (only if method 1 failed)
+                if not method1.get("success"):
+                    method2 = {"name": "Popen_stdin_write"}
+                    try:
+                        start = time.time()
+                        proc = subprocess.Popen(
+                            cmd,
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            cwd=temp_dir
+                        )
+                        
+                        proc.stdin.write(inp)
+                        proc.stdin.flush()
+                        proc.stdin.close()
+                        
+                        stdout, stderr = proc.communicate(timeout=2)
+                        elapsed = time.time() - start
+                        
+                        method2["success"] = True
+                        method2["time"] = f"{elapsed:.3f}s"
+                        method2["returncode"] = proc.returncode
+                        method2["stdout"] = stdout
+                        method2["stderr"] = stderr
+                        method2["matched"] = stdout.strip() == tc["expected_output"].strip()
+                        
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        method2["success"] = False
+                        method2["error"] = "TIMEOUT after 2s"
+                    except Exception as e:
+                        method2["success"] = False
+                        method2["error"] = str(e)
+                    
+                    test_debug["methods"].append(method2)
+                
+                # METHOD 3: Write input to file and redirect stdin (only if both failed)
+                if not any(m.get("success") for m in test_debug["methods"]):
+                    method3 = {"name": "stdin_from_file"}
+                    try:
+                        input_file = os.path.join(temp_dir, f"input_{idx}.txt")
+                        with open(input_file, "w") as f:
+                            f.write(inp)
+                        
+                        start = time.time()
+                        with open(input_file, "r") as f:
+                            result = subprocess.run(
+                                cmd,
+                                stdin=f,
+                                capture_output=True,
+                                text=True,
+                                timeout=2,
+                                cwd=temp_dir
+                            )
+                        elapsed = time.time() - start
+                        
+                        method3["success"] = True
+                        method3["time"] = f"{elapsed:.3f}s"
+                        method3["returncode"] = result.returncode
+                        method3["stdout"] = result.stdout
+                        method3["stderr"] = result.stderr
+                        method3["matched"] = result.stdout.strip() == tc["expected_output"].strip()
+                        
+                    except subprocess.TimeoutExpired:
+                        method3["success"] = False
+                        method3["error"] = "TIMEOUT after 2s"
+                    except Exception as e:
+                        method3["success"] = False
+                        method3["error"] = str(e)
+                    
+                    test_debug["methods"].append(method3)
+                
+                debug_info["test_results"].append(test_debug)
+            
+            # Summary
+            working_method = None
+            for test in debug_info["test_results"]:
+                for method in test["methods"]:
+                    if method.get("success") and method.get("matched"):
+                        working_method = method["name"]
+                        break
+                if working_method:
+                    break
+            
+            debug_info["summary"] = {
+                "total_tests": len(test_cases),
+                "working_method": working_method if working_method else "NONE - All methods failed",
+                "diagnosis": "Check the detailed test_results for each method's output"
+            }
+            
+            return debug_info
+        
+    except Exception as e:
+        import traceback
+        debug_info["error"] = str(e)
+        debug_info["traceback"] = traceback.format_exc()
+        return debug_info
 
+
+# Also add this simple test endpoint
+@app.post("/simple-test")
+def simple_test():
+    """Most basic test - no input needed"""
+    try:
+        code = "print('Hello from Python')"
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_file = os.path.join(temp_dir, "test.py")
+            with open(test_file, "w") as f:
+                f.write(code)
+            
+            result = subprocess.run(
+                [sys.executable, "-u", test_file],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            
+            return {
+                "success": result.returncode == 0,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "message": "If this works, Python execution is fine. The issue is with input handling."
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 # --------- Utility Functions ---------
+
 def sanitize_code(code: str) -> str:
     return code.replace("\u00a0", " ").replace("\u202f", " ").replace("\u200b", "")
 
 def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
     """Generate the command to execute code based on language"""
     if lang == "python":
-        return [sys.executable, "-u", "-E", "-S", src_path]
+        return [sys.executable, "-u", src_path]
     elif lang == "javascript":
         return ["node", src_path]
     elif lang == "perl":
@@ -475,7 +691,7 @@ def get_command(lang, src_path, exe_path, tmp_dir, class_name=None):
         raise ValueError(f"Unsupported language: {lang}")
 
 def run_once(lang, src_path, exe_path, temp_dir, class_name=None):
-    """Execute code once and return standardized result - PHASE 2"""
+    """Execute code once and return standardized result"""
     cmd = get_command(lang, src_path, exe_path, temp_dir, class_name)
     result = run_with_timeout(cmd, timeout=MAX_EXECUTION_TIME, temp_dir=temp_dir)
     return build_standard_response(result, lang)
