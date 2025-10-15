@@ -17,10 +17,31 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Hugging Face API configuration
-HF_API_KEY = os.getenv("HF_API_KEY", "")
-HF_MODEL = os.getenv("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")  # Default model
-HAS_HF = bool(HF_API_KEY)
+# Hugging Face Inference Client configuration
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY")
+HF_MODEL = os.getenv("HF_MODEL", "openai/gpt-oss-20b")
+
+# Initialize Hugging Face client
+HAS_HF = False
+hf_client = None
+
+if HF_TOKEN:
+    try:
+        from huggingface_hub import InferenceClient
+        hf_client = InferenceClient(
+            provider="fireworks-ai",
+            api_key=HF_TOKEN,
+        )
+        HAS_HF = True
+        print(f"Hugging Face Inference Client initialized with model: {HF_MODEL}")
+    except ImportError:
+        print("Warning: huggingface_hub not installed. Run: pip install huggingface_hub")
+        HAS_HF = False
+    except Exception as e:
+        print(f"Warning: Failed to initialize Hugging Face client: {e}")
+        HAS_HF = False
+else:
+    print("Warning: HF_TOKEN not set - auto_generate disabled")
 
 # Optional modules for resource limiting
 try:
@@ -236,12 +257,14 @@ def detect_input_requirement(code: str, language: str) -> bool:
         "cpp": r"\b(cin|scanf|gets|getline)\b",
         "java": r"\b(Scanner|BufferedReader|System\.in)\b",
         "javascript": r"\b(readline|prompt|process\.stdin)\b",
-        "perl": r"\b(<STDIN>|<>|readline)\b",
+        "perl": r"<STDIN>|readline|<>",  # Fixed: Perl input detection
         "go": r"\b(fmt\.Scan|bufio\.NewReader|os\.Stdin)\b"
     }
     
     pattern = input_patterns.get(language, r"\b(input|scanf|cin|Scanner)\b")
-    return bool(re.search(pattern, code))
+    has_input = bool(re.search(pattern, code))
+    print(f"[DEBUG] Language: {language}, Has input: {has_input}, Pattern: {pattern}")
+    return has_input
 
 
 # ============= EXECUTION FUNCTIONS =============
@@ -423,81 +446,72 @@ def run_once(cmd: List[str], temp_dir: str, language: str) -> dict:
 
 def generate_test_cases(code: str, language: str) -> List[TestCase]:
     """
-    AI-powered test case generator using Hugging Face Inference API
-    Generates test cases based on code analysis
+    AI-powered test case generator using Hugging Face Inference Client
+    Uses Fireworks AI provider for reliable inference
     """
-    if not HAS_HF:
+    if not HAS_HF or not hf_client:
+        print("HF_TOKEN not set or client not initialized - auto_generate disabled")
         return []
     
-    prompt = f"""Generate 2-3 test cases for this {language.upper()} code. Return ONLY a JSON array, no other text.
+    print(f"Generating test cases for {language} using {HF_MODEL}...")
+    
+    system_prompt = """You are a test case generator. Generate 2-3 test cases for code.
+Return ONLY a valid JSON array, no markdown, no explanation.
+Format: [{"input":"value","expected_output":"value"}]
+If code has no input, use empty string."""
 
-Format: [{{"input":"value","expected_output":"value"}}, ...]
+    user_prompt = f"""Generate test cases for this {language.upper()} code:
+
+```{language}
+{code}
+```
 
 Rules:
-- If code has no input function, use empty string for input
-- Use realistic, simple test values
-- Return only valid JSON, no markdown
-
-Code:
-{code}
+- Return ONLY JSON array
+- Use simple realistic values
+- If multiple inputs: separate with \\n
+- No markdown, no code blocks
 
 JSON:"""
     
     try:
-        # Hugging Face Inference API endpoint
-        api_url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+        print(f"Calling Hugging Face Inference Client...")
         
-        headers = {
-            "Authorization": f"Bearer {HF_API_KEY}",
-            "Content-Type": "application/json"
-        }
+        completion = hf_client.chat.completions.create(
+            model=HF_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=500,
+        )
         
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 500,
-                "temperature": 0.3,
-                "return_full_text": False
-            }
-        }
+        content = completion.choices[0].message.content.strip()
         
-        response = requests.post(api_url, headers=headers, json=payload, timeout=15)
+        print(f"Response received ({len(content)} chars)")
+        print(f"Preview: {content[:150]}...")
         
-        if response.status_code == 503:
-            # Model is loading, wait and retry once
-            print("Model loading, waiting 10 seconds...")
-            time.sleep(10)
-            response = requests.post(api_url, headers=headers, json=payload, timeout=15)
-        
-        if response.status_code != 200:
-            print(f"HF API error: {response.status_code} - {response.text}")
-            return []
-        
-        result = response.json()
-        
-        # Extract generated text
-        if isinstance(result, list) and len(result) > 0:
-            content = result[0].get("generated_text", "")
-        else:
-            content = result.get("generated_text", "")
-        
-        content = content.strip()
-        
-        # Try to extract JSON from response
+        # Extract JSON from response
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
         
-        # Find JSON array in the response
+        # Find JSON array
         json_match = re.search(r'\[[\s\S]*\]', content)
         if json_match:
             content = json_match.group(0)
+            print("Found JSON array in response")
+        else:
+            print("No JSON array found in response")
+            return []
         
         # Parse JSON
         test_data = json.loads(content)
         
         if not isinstance(test_data, list):
+            print(f"Response is not a list: {type(test_data)}")
             return []
         
         # Convert to TestCase objects
@@ -511,13 +525,15 @@ JSON:"""
                     )
                 )
         
+        print(f"Successfully generated {len(test_cases)} test cases")
         return test_cases
         
-    except requests.exceptions.Timeout:
-        print("HF API timeout")
+    except ImportError:
+        print("huggingface_hub not installed")
         return []
     except json.JSONDecodeError as e:
-        print(f"Failed to parse JSON from HF response: {e}")
+        print(f"JSON parsing failed: {e}")
+        print(f"Content: {content[:200]}")
         return []
     except Exception as e:
         print(f"HF test generation failed: {str(e)}")
@@ -752,7 +768,7 @@ def run_code(req: CodeRequest):
                 else:
                     return {
                         "stdout": "",
-                        "stderr": "Auto-generate requires Hugging Face API key. Set HF_API_KEY environment variable.",
+                        "stderr": "Auto-generate requires HF_TOKEN. Set HF_TOKEN environment variable. Install: pip install huggingface_hub",
                         "status": "error",
                         "time": "0s",
                         "memory": "0MB",
@@ -775,6 +791,9 @@ def run_code(req: CodeRequest):
                 # Prepare input - ensure it's properly formatted
                 input_data = tc.input if needs_input else ""
                 expected = tc.expected_output or ""
+                
+                # Debug: Print what we're sending
+                print(f"Test {idx}: Sending input: {repr(input_data)}")
                 
                 result = run_with_timeout(cmd, input_data, MAX_EXECUTION_TIME, temp_dir)
                 
