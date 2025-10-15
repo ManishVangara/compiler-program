@@ -1,0 +1,118 @@
+#!/bin/bash
+# Corrected Test Cases with Standardized Input Format
+# All inputs end with \n for consistency
+
+BASE_URL="http://localhost:8000"
+
+echo "========================================="
+echo "STANDARDIZED INPUT FORMAT TESTS"
+echo "========================================="
+echo "Format: All inputs use newline-separated values with trailing \\n"
+echo ""
+
+# Python - Newline separated (STANDARD)
+echo "[1] Python - Addition (Newline Separated)"
+curl -X POST $BASE_URL/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "language": "python",
+    "code": "a = int(input())\nb = int(input())\nprint(a + b)",
+    "test_cases": [
+      {"input": "5\n3\n", "expected_output": "8"},
+      {"input": "10\n20\n", "expected_output": "30"}
+    ],
+    "auto_generate": false
+  }'
+
+# C - Newline separated (STANDARD)
+echo -e "\n\n[2] C - Addition (Newline Separated)"
+curl -X POST $BASE_URL/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "language": "c",
+    "code": "#include <stdio.h>\nint main() {\n    int a, b;\n    scanf(\"%d\", &a);\n    scanf(\"%d\", &b);\n    printf(\"%d\\n\", a + b);\n    return 0;\n}",
+    "test_cases": [
+      {"input": "5\n3\n", "expected_output": "8"},
+      {"input": "10\n20\n", "expected_output": "30"}
+    ],
+    "auto_generate": false
+  }'
+
+# C++ - Works with both formats (STANDARD: newline)
+echo -e "\n\n[3] C++ - Addition (Newline Separated)"
+curl -X POST $BASE_URL/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "language": "cpp",
+    "code": "#include <iostream>\nusing namespace std;\nint main() {\n    int a, b;\n    cin >> a >> b;\n    cout << a + b << endl;\n    return 0;\n}",
+    "test_cases": [
+      {"input": "5\n3\n", "expected_output": "8"},
+      {"input": "10\n20\n", "expected_output": "30"}
+    ],
+    "auto_generate": false
+  }'
+
+# Java - Newline separated (STANDARD)
+echo -e "\n\n[4] Java - Addition (Newline Separated)"
+curl -X POST $BASE_URL/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "language": "java",
+    "code": "import java.util.Scanner;\npublic class Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        int a = sc.nextInt();\n        int b = sc.nextInt();\n        System.out.println(a + b);\n    }\n}",
+    "test_cases": [
+      {"input": "5\n3\n", "expected_output": "8"},
+      {"input": "10\n20\n", "expected_output": "30"}
+    ],
+    "auto_generate": false
+  }'
+
+# Go - Works with both (STANDARD: newline)
+echo -e "\n\n[5] Go - Addition (Newline Separated)"
+curl -X POST $BASE_URL/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "language": "go",
+    "code": "package main\nimport \"fmt\"\nfunc main() {\n    var a, b int\n    fmt.Scan(&a, &b)\n    fmt.Println(a + b)\n}",
+    "test_cases": [
+      {"input": "5\n3\n", "expected_output": "8"},
+      {"input": "10\n20\n", "expected_output": "30"}
+    ],
+    "auto_generate": false
+  }'
+
+# Perl - FIXED: Newline separated with chomp (STANDARD)
+echo -e "\n\n[6] Perl - Addition (Newline Separated - FIXED)"
+curl -X POST $BASE_URL/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "language": "perl",
+    "code": "chomp(my $a = <STDIN>);\nchomp(my $b = <STDIN>);\nprint $a + $b, \"\\n\";",
+    "test_cases": [
+      {"input": "5\n3\n", "expected_output": "8"},
+      {"input": "10\n20\n", "expected_output": "30"}
+    ],
+    "auto_generate": false
+  }'
+
+# Perl - Multiplication (FIXED)
+echo -e "\n\n[7] Perl - Multiplication (Newline Separated - FIXED)"
+curl -X POST $BASE_URL/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "language": "perl",
+    "code": "chomp(my $a = <STDIN>);\nchomp(my $b = <STDIN>);\nprint $a * $b, \"\\n\";",
+    "test_cases": [
+      {"input": "5\n3\n", "expected_output": "15"},
+      {"input": "10\n10\n", "expected_output": "100"},
+      {"input": "7\n8\n", "expected_output": "56"}
+    ],
+    "auto_generate": false
+  }'
+
+echo -e "\n\n========================================="
+echo "ALL TESTS COMPLETED"
+echo "========================================="
+echo ""
+echo "Standard Format Used: \"value1\\nvalue2\\n\""
+echo "All languages use newline-separated inputs"
+echo "All inputs end with trailing newline"
