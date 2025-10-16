@@ -7,56 +7,15 @@ import tempfile
 import shutil
 import sys
 import json
-import requests
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Hugging Face Inference Client configuration
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY")
-HF_MODEL = os.getenv("HF_MODEL", "openai/gpt-oss-20b")
-
-# Initialize Hugging Face client
-HAS_HF = False
-hf_client = None
-
-if HF_TOKEN:
-    try:
-        from huggingface_hub import InferenceClient
-        hf_client = InferenceClient(
-            provider="fireworks-ai",
-            api_key=HF_TOKEN,
-        )
-        HAS_HF = True
-        print(f"Hugging Face Inference Client initialized with model: {HF_MODEL}")
-    except ImportError:
-        print("Warning: huggingface_hub not installed. Run: pip install huggingface_hub")
-        HAS_HF = False
-    except Exception as e:
-        print(f"Warning: Failed to initialize Hugging Face client: {e}")
-        HAS_HF = False
-else:
-    print("Warning: HF_TOKEN not set - auto_generate disabled")
-
-# Optional modules for resource limiting
-try:
-    import resource
-    HAS_RESOURCE = True
-except ImportError:
-    HAS_RESOURCE = False
-
-try:
-    import psutil
-    HAS_PSUTIL = True
-except ImportError:
-    HAS_PSUTIL = False
-
-app = FastAPI()
+app = FastAPI(title="Code Execution Engine", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,13 +25,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============= CONFIGURATION =============
 SUPPORTED_LANGUAGES = ["python", "c", "cpp", "java", "javascript", "perl", "go"]
 MAX_CODE_SIZE = 10000
 MAX_EXECUTION_TIME = 5
 MAX_MEMORY_MB = 150
 
-# Security patterns per language
 FORBIDDEN_PATTERNS = {
     "python": [
         r"import\s+(os|sys|subprocess|shutil|socket|urllib|requests)",
@@ -121,8 +78,19 @@ FORBIDDEN_PATTERNS = {
     ]
 }
 
+try:
+    import resource
+    HAS_RESOURCE = True
+except ImportError:
+    HAS_RESOURCE = False
 
-# ============= REQUEST MODELS =============
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
+
 class TestCase(BaseModel):
     input: str
     expected_output: Optional[str] = ""
@@ -132,31 +100,107 @@ class CodeRequest(BaseModel):
     language: str
     code: str
     test_cases: Optional[List[TestCase]] = []
-    auto_generate: bool = False  # Flag to auto-generate test cases
+    auto_generate: bool = False
 
 
-# ============= SECURITY VALIDATION =============
+class AIProviderFactory:
+    """Factory for creating AI provider clients with flexible configuration"""
+    
+    @staticmethod
+    def create_client(provider: Optional[str] = None):
+        """Create AI client based on provider or environment variables"""
+        provider = provider or os.getenv("AI_PROVIDER", "").lower()
+        
+        if provider == "openai" or os.getenv("OPENAI_API_KEY"):
+            return AIProviderFactory._create_openai_client()
+        elif provider == "anthropic" or os.getenv("ANTHROPIC_API_KEY"):
+            return AIProviderFactory._create_anthropic_client()
+        elif provider == "huggingface" or os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY"):
+            return AIProviderFactory._create_huggingface_client()
+        
+        return None
+    
+    @staticmethod
+    def _create_openai_client():
+        """Create OpenAI client"""
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            print(f"OpenAI client initialized with model: {model}")
+            return {"type": "openai", "client": client, "model": model}
+        except ImportError:
+            print("Warning: openai package not installed")
+            return None
+        except Exception as e:
+            print(f"Warning: Failed to initialize OpenAI client: {e}")
+            return None
+    
+    @staticmethod
+    def _create_anthropic_client():
+        """Create Anthropic client"""
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None
+        
+        try:
+            from anthropic import Anthropic
+            client = Anthropic(api_key=api_key)
+            model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
+            print(f"Anthropic client initialized with model: {model}")
+            return {"type": "anthropic", "client": client, "model": model}
+        except ImportError:
+            print("Warning: anthropic package not installed")
+            return None
+        except Exception as e:
+            print(f"Warning: Failed to initialize Anthropic client: {e}")
+            return None
+    
+    @staticmethod
+    def _create_huggingface_client():
+        """Create HuggingFace client"""
+        api_key = os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY")
+        if not api_key:
+            return None
+        
+        try:
+            from huggingface_hub import InferenceClient
+            client = InferenceClient(
+                provider="fireworks-ai",
+                api_key=api_key,
+            )
+            model = os.getenv("HF_MODEL", "openai/gpt-oss-20b")
+            print(f"HuggingFace client initialized with model: {model}")
+            return {"type": "huggingface", "client": client, "model": model}
+        except ImportError:
+            print("Warning: huggingface_hub package not installed")
+            return None
+        except Exception as e:
+            print(f"Warning: Failed to initialize HuggingFace client: {e}")
+            return None
+
+
 def validate_code_security(code: str, language: str) -> tuple[bool, str]:
     """Validate code for security threats"""
-    
-    # Check code size
     if len(code) > MAX_CODE_SIZE:
         return False, f"Code too large. Maximum {MAX_CODE_SIZE} characters allowed."
     
     if not code.strip():
         return False, "Code cannot be empty."
     
-    # Check language-specific forbidden patterns
     if language in FORBIDDEN_PATTERNS:
         for pattern in FORBIDDEN_PATTERNS[language]:
             if re.search(pattern, code, re.IGNORECASE):
                 return False, f"Security violation: Forbidden pattern detected for {language}."
     
-    # Additional checks for dangerous file operations
     dangerous_patterns = [
-        r"\.\.\/",  # Directory traversal
-        r"\/etc\/",  # System files
-        r"\/root\/",  # Root directory
+        r"\.\.\/",
+        r"\/etc\/",
+        r"\/root\/",
     ]
     
     for pattern in dangerous_patterns:
@@ -166,39 +210,30 @@ def validate_code_security(code: str, language: str) -> tuple[bool, str]:
     return True, ""
 
 
-# ============= CODE SANITIZATION =============
 def sanitize_code(code: str) -> str:
     """Remove problematic Unicode characters"""
     return code.replace("\u00a0", " ").replace("\u202f", " ").replace("\u200b", "")
 
 
-# ============= LANGUAGE DETECTION =============
 def detect_language_mismatch(code: str, declared_lang: str) -> tuple[bool, str]:
     """Detect if code language doesn't match declared language"""
-    
     code_lower = code.lower()
     
-    # Python indicators
     python_indicators = ["def ", "import ", "print(", "input("]
     python_score = sum(1 for indicator in python_indicators if indicator in code_lower)
     
-    # Java indicators
     java_indicators = ["public class", "public static void main", "System.out.println"]
     java_score = sum(1 for indicator in java_indicators if indicator in code_lower)
     
-    # JavaScript indicators
     js_indicators = ["console.log", "const ", "let ", "=>", "function"]
     js_score = sum(1 for indicator in js_indicators if indicator in code_lower)
     
-    # Go indicators
     go_indicators = ["package main", "func main()", "fmt.Println"]
     go_score = sum(1 for indicator in go_indicators if indicator in code_lower)
     
-    # C++ indicators
     cpp_indicators = ["std::", "cout <<", "cin >>", "#include <iostream>"]
     cpp_score = sum(1 for indicator in cpp_indicators if indicator in code_lower)
     
-    # Check mismatches
     if declared_lang == "python" and python_score == 0 and (java_score >= 2 or js_score >= 2 or go_score >= 2):
         return True, "Code doesn't appear to be Python"
     
@@ -217,13 +252,11 @@ def detect_language_mismatch(code: str, declared_lang: str) -> tuple[bool, str]:
     return False, ""
 
 
-# ============= UTILITY FUNCTIONS =============
 def extract_java_class_name(code: str) -> str:
     """Extract Java class name, sanitized"""
     match = re.search(r"(?:public\s+)?class\s+(\w+)", code)
     if match:
         name = match.group(1)
-        # Only allow valid identifiers
         if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
             return name
     return "Main"
@@ -235,17 +268,9 @@ def set_resource_limits():
         return
     
     try:
-        # Memory limit (both soft and hard)
-        mem_bytes = MAX_MEMORY_MB * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-        
-        # CPU time limit
-        resource.setrlimit(resource.RLIMIT_CPU, (MAX_EXECUTION_TIME, MAX_EXECUTION_TIME))
-        
-        # File size limit (1MB)
-        resource.setrlimit(resource.RLIMIT_FSIZE, (1024*1024, 1024*1024))
+        resource.setrlimit(resource.RLIMIT_CPU, (MAX_EXECUTION_TIME + 5, MAX_EXECUTION_TIME + 5))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (50*1024*1024, 50*1024*1024))
     except Exception:
-        # Silently ignore if we can't set limits (e.g., insufficient permissions)
         pass
 
 
@@ -257,31 +282,25 @@ def detect_input_requirement(code: str, language: str) -> bool:
         "cpp": r"\b(cin|scanf|gets|getline)\b",
         "java": r"\b(Scanner|BufferedReader|System\.in)\b",
         "javascript": r"\b(readline|prompt|process\.stdin)\b",
-        "perl": r"<STDIN>|readline|<>",  # Fixed: Perl input detection
+        "perl": r"<STDIN>|readline|<>",
         "go": r"\b(fmt\.Scan|bufio\.NewReader|os\.Stdin)\b"
     }
     
     pattern = input_patterns.get(language, r"\b(input|scanf|cin|Scanner)\b")
     has_input = bool(re.search(pattern, code))
-    print(f"[DEBUG] Language: {language}, Has input: {has_input}, Pattern: {pattern}")
+    # print(f"[DEBUG] Language: {language}, Has input: {has_input}")
     return has_input
 
 
-# ============= EXECUTION FUNCTIONS =============
 def run_with_timeout(cmd: List[str], input_data: str = "", timeout: int = MAX_EXECUTION_TIME, cwd: str = None) -> dict:
     """Execute command with timeout and resource monitoring"""
-    
     try:
-        # Setup
         preexec_fn = set_resource_limits if HAS_RESOURCE and os.name != "nt" else None
         
-        # Ensure input ends with newline if it has content
         if input_data:
-            # Split by newline and ensure each line ends with \n
             lines = input_data.strip().split('\n')
             input_data = '\n'.join(lines) + '\n'
         
-        # Start process
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -292,27 +311,22 @@ def run_with_timeout(cmd: List[str], input_data: str = "", timeout: int = MAX_EX
             preexec_fn=preexec_fn
         )
         
-        # Track metrics
         max_memory_mb = 0
         start_time = time.time()
         
-        # Memory tracking with psutil in a separate approach
         if HAS_PSUTIL:
             import threading
             memory_samples = []
             stop_monitoring = threading.Event()
             
             def monitor_memory():
-                """Monitor memory usage in background thread"""
                 try:
                     process = psutil.Process(proc.pid)
                     while not stop_monitoring.is_set():
                         try:
-                            # Get memory info for process and all children
                             mem_info = process.memory_info()
                             current_mem = mem_info.rss
                             
-                            # Also check children
                             for child in process.children(recursive=True):
                                 try:
                                     child_mem = child.memory_info()
@@ -321,32 +335,26 @@ def run_with_timeout(cmd: List[str], input_data: str = "", timeout: int = MAX_EX
                                     pass
                             
                             memory_samples.append(current_mem)
-                            time.sleep(0.01)  # Sample every 10ms
-                            
+                            time.sleep(0.01)
                         except (psutil.NoSuchProcess, psutil.AccessDenied):
                             break
                 except Exception:
                     pass
             
-            # Start monitoring thread
             monitor_thread = threading.Thread(target=monitor_memory, daemon=True)
             monitor_thread.start()
         
         try:
-            # Send input immediately and get output with timeout
             stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
             execution_time = time.time() - start_time
             
-            # Stop memory monitoring
             if HAS_PSUTIL:
                 stop_monitoring.set()
                 monitor_thread.join(timeout=0.5)
                 
-                # Calculate max memory from samples
                 if memory_samples:
                     max_memory_mb = max(memory_samples) / (1024 * 1024)
                 else:
-                    # Fallback: try to get final memory reading
                     try:
                         process = psutil.Process(proc.pid)
                         mem_info = process.memory_info()
@@ -361,15 +369,13 @@ def run_with_timeout(cmd: List[str], input_data: str = "", timeout: int = MAX_EX
                 "time_sec": round(execution_time, 3),
                 "memory_mb": round(max_memory_mb, 2)
             }
-            
+        
         except subprocess.TimeoutExpired:
-            # Stop monitoring
             if HAS_PSUTIL:
                 stop_monitoring.set()
                 if memory_samples:
                     max_memory_mb = max(memory_samples) / (1024 * 1024)
             
-            # Kill process
             proc.kill()
             try:
                 stdout, stderr = proc.communicate(timeout=1)
@@ -383,7 +389,7 @@ def run_with_timeout(cmd: List[str], input_data: str = "", timeout: int = MAX_EX
                 "time_sec": timeout,
                 "memory_mb": round(max_memory_mb, 2)
             }
-        
+    
     except Exception as e:
         return {
             "returncode": -1,
@@ -394,8 +400,13 @@ def run_with_timeout(cmd: List[str], input_data: str = "", timeout: int = MAX_EX
         }
 
 
-def get_execute_command(lang: str, src_path: str, exe_path: str, temp_dir: str, class_name: str = None) -> List[str]:
+def get_execute_command(lang: str, src_path: str, exe_path: str, temp_dir: str, class_name: Optional[str] = None) -> List[str]:
     """Get command to execute code based on language"""
+    if lang == "java":
+        if not class_name:
+            raise ValueError("Java execution requires class_name")
+        return ["java", "-cp", temp_dir, class_name]
+    
     commands = {
         "python": [sys.executable, "-u", src_path],
         "javascript": ["node", src_path],
@@ -403,7 +414,6 @@ def get_execute_command(lang: str, src_path: str, exe_path: str, temp_dir: str, 
         "go": [exe_path],
         "c": [exe_path],
         "cpp": [exe_path],
-        "java": ["java", "-cp", temp_dir, class_name] if class_name else None
     }
     cmd = commands.get(lang)
     if cmd is None:
@@ -413,20 +423,15 @@ def get_execute_command(lang: str, src_path: str, exe_path: str, temp_dir: str, 
 
 def clean_output(text: str) -> str:
     """Clean output by removing input prompts and warnings"""
-    # Remove common input prompts
     text = re.sub(r"Enter\s+[^:]*:\s*", "", text, flags=re.IGNORECASE)
-    
-    # Remove resource limit warnings
     text = re.sub(r"Warning:\s*Could not set resource limits[^\n]*\n?", "", text, flags=re.IGNORECASE)
-    
     return text.strip()
 
 
 def run_once(cmd: List[str], temp_dir: str, language: str) -> dict:
-    """Execute code once without test cases and return standardized response"""
+    """Execute code once without test cases"""
     result = run_with_timeout(cmd, "", MAX_EXECUTION_TIME, temp_dir)
     
-    # Determine status
     if result["returncode"] == 0:
         status = "success"
     elif "timeout" in result["stderr"].lower():
@@ -444,22 +449,22 @@ def run_once(cmd: List[str], temp_dir: str, language: str) -> dict:
     }
 
 
-def generate_test_cases(code: str, language: str) -> List[TestCase]:
-    """
-    AI-powered test case generator using Hugging Face Inference Client
-    Uses Fireworks AI provider for reliable inference
-    """
-    if not HAS_HF or not hf_client:
-        print("HF_TOKEN not set or client not initialized - auto_generate disabled")
+def generate_test_cases_with_ai(code: str, language: str, provider_info: Dict) -> List[TestCase]:
+    """AI-powered test case generator with multi-provider support"""
+    if not provider_info:
         return []
     
-    print(f"Generating test cases for {language} using {HF_MODEL}...")
+    provider_type = provider_info["type"]
+    client = provider_info["client"]
+    model = provider_info["model"]
+    
+    print(f"Generating test cases using {provider_type} with model {model}...")
     
     system_prompt = """You are a test case generator. Generate 2-3 test cases for code.
 Return ONLY a valid JSON array, no markdown, no explanation.
 Format: [{"input":"value","expected_output":"value"}]
 If code has no input, use empty string."""
-
+    
     user_prompt = f"""Generate test cases for this {language.upper()} code:
 
 ```{language}
@@ -475,48 +480,65 @@ Rules:
 JSON:"""
     
     try:
-        print(f"Calling Hugging Face Inference Client...")
+        if provider_type == "openai":
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=500,
+            )
+            content = completion.choices[0].message.content.strip()
         
-        completion = hf_client.chat.completions.create(
-            model=HF_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.3,
-            max_tokens=500,
-        )
+        elif provider_type == "anthropic":
+            message = client.messages.create(
+                model=model,
+                max_tokens=500,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+            )
+            content = message.content[0].text.strip()
         
-        content = completion.choices[0].message.content.strip()
+        elif provider_type == "huggingface":
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=500,
+            )
+            content = completion.choices[0].message.content.strip()
+        
+        else:
+            return []
         
         print(f"Response received ({len(content)} chars)")
-        print(f"Preview: {content[:150]}...")
         
-        # Extract JSON from response
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
         
-        # Find JSON array
         json_match = re.search(r'\[[\s\S]*\]', content)
         if json_match:
             content = json_match.group(0)
-            print("Found JSON array in response")
         else:
-            print("No JSON array found in response")
             return []
         
-        # Parse JSON
         test_data = json.loads(content)
         
         if not isinstance(test_data, list):
-            print(f"Response is not a list: {type(test_data)}")
             return []
         
-        # Convert to TestCase objects
         test_cases = []
-        for tc in test_data[:3]:  # Limit to 3 test cases
+        for tc in test_data[:3]:
             if isinstance(tc, dict):
                 test_cases.append(
                     TestCase(
@@ -527,20 +549,15 @@ JSON:"""
         
         print(f"Successfully generated {len(test_cases)} test cases")
         return test_cases
-        
-    except ImportError:
-        print("huggingface_hub not installed")
-        return []
+    
     except json.JSONDecodeError as e:
         print(f"JSON parsing failed: {e}")
-        print(f"Content: {content[:200]}")
         return []
     except Exception as e:
-        print(f"HF test generation failed: {str(e)}")
+        print(f"Test generation failed: {str(e)}")
         return []
 
 
-# ============= COMPILATION HANDLERS =============
 def compile_c_cpp(lang: str, src_path: str, exe_path: str, temp_dir: str) -> dict:
     """Compile C/C++ code"""
     compiler = "gcc" if lang == "c" else "g++"
@@ -630,13 +647,10 @@ def check_interpreter(lang: str) -> dict:
     return {"success": True}
 
 
-# ============= MAIN ENDPOINT =============
 @app.post("/run")
 def run_code(req: CodeRequest):
     """Main endpoint to execute code"""
-    
     try:
-        # Validate language
         lang = req.language.lower()
         if lang not in SUPPORTED_LANGUAGES:
             return {
@@ -648,10 +662,8 @@ def run_code(req: CodeRequest):
                 "language": lang
             }
         
-        # Sanitize code
         cleaned_code = sanitize_code(req.code)
         
-        # Security validation (AFTER sanitization)
         is_safe, security_error = validate_code_security(cleaned_code, lang)
         if not is_safe:
             return {
@@ -663,7 +675,6 @@ def run_code(req: CodeRequest):
                 "language": lang
             }
         
-        # Language mismatch detection
         is_mismatch, mismatch_msg = detect_language_mismatch(cleaned_code, lang)
         if is_mismatch:
             return {
@@ -675,14 +686,11 @@ def run_code(req: CodeRequest):
                 "language": lang
             }
         
-        # Check if code needs input
         needs_input = detect_input_requirement(cleaned_code, lang)
         
-        # Process with temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             fid = uuid.uuid4().hex
             
-            # Determine filename
             if lang == "java":
                 class_name = extract_java_class_name(cleaned_code)
                 filename = f"{class_name}.java"
@@ -696,11 +704,9 @@ def run_code(req: CodeRequest):
             src_path = os.path.join(temp_dir, filename)
             exe_path = os.path.join(temp_dir, fid + (".exe" if os.name == "nt" else ""))
             
-            # Write code to file
             with open(src_path, "w", encoding="utf-8") as f:
                 f.write(cleaned_code)
             
-            # Compilation phase for compiled languages
             class_name = None
             if lang in ["c", "cpp"]:
                 compile_result = compile_c_cpp(lang, src_path, exe_path, temp_dir)
@@ -740,7 +746,6 @@ def run_code(req: CodeRequest):
                     }
             
             else:
-                # Check interpreter availability
                 interp_check = check_interpreter(lang)
                 if not interp_check["success"]:
                     return {
@@ -752,34 +757,33 @@ def run_code(req: CodeRequest):
                         "language": lang
                     }
             
-            # Execution phase
             cmd = get_execute_command(lang, src_path, exe_path, temp_dir, class_name)
             
-            # Auto-generate test cases if requested
             if req.auto_generate and not req.test_cases:
-                if HAS_HF:
-                    print(f"Auto-generating test cases for {lang} using Hugging Face...")
-                    generated_cases = generate_test_cases(cleaned_code, lang)
-                    if generated_cases:
-                        req.test_cases = generated_cases
-                        print(f"Generated {len(generated_cases)} test cases")
+                if needs_input:
+                    ai_client = AIProviderFactory.create_client()
+                    if ai_client:
+                        generated_cases = generate_test_cases_with_ai(cleaned_code, lang, ai_client)
+                        if generated_cases:
+                            req.test_cases = generated_cases
+                            print(f"Auto-generated {len(generated_cases)} test cases using {ai_client['type']}")
+                        else:
+                            print("Failed to generate test cases, running without tests")
                     else:
-                        print("Failed to generate test cases, running without tests")
+                        return {
+                            "stdout": "",
+                            "stderr": "Auto-generate requires AI provider. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or HF_TOKEN.",
+                            "status": "error",
+                            "time": "0s",
+                            "memory": "0MB",
+                            "language": lang
+                        }
                 else:
-                    return {
-                        "stdout": "",
-                        "stderr": "Auto-generate requires HF_TOKEN. Set HF_TOKEN environment variable. Install: pip install huggingface_hub",
-                        "status": "error",
-                        "time": "0s",
-                        "memory": "0MB",
-                        "language": lang
-                    }
+                    print("Code doesn't require input, skipping test case generation")
             
-            # If no test cases provided and no input needed, run once
             if not req.test_cases and not needs_input:
                 return run_once(cmd, temp_dir, lang)
             
-            # Execute with test cases
             test_cases = req.test_cases if req.test_cases else [TestCase(input="", expected_output="")]
             
             results = []
@@ -788,19 +792,16 @@ def run_code(req: CodeRequest):
             passed_count = 0
             
             for idx, tc in enumerate(test_cases, 1):
-                # Prepare input - ensure it's properly formatted
                 input_data = tc.input if needs_input else ""
                 expected = tc.expected_output or ""
                 
-                # Debug: Print what we're sending
-                print(f"Test {idx}: Sending input: {repr(input_data)}")
+                # print(f"Test {idx}: Sending input: {repr(input_data)}")
                 
                 result = run_with_timeout(cmd, input_data, MAX_EXECUTION_TIME, temp_dir)
                 
                 actual = clean_output(result["stdout"])
                 expected_clean = clean_output(expected)
                 
-                # Check if passed
                 passed = actual == expected_clean if expected else None
                 if passed:
                     passed_count += 1
@@ -847,14 +848,14 @@ def run_code(req: CodeRequest):
         }
 
 
-# ============= HEALTH CHECK =============
 @app.get("/")
 def health_check():
     """Health check endpoint"""
     return {
         "status": "online",
         "supported_languages": SUPPORTED_LANGUAGES,
-        "version": "1.0"
+        "version": "1.0.0",
+        "ai_providers": ["openai", "anthropic", "huggingface"]
     }
 
 
@@ -868,4 +869,4 @@ def get_languages():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=5000)
