@@ -77,6 +77,7 @@ Starting the Server - with this command
 ## Project Flow
 
 ![Code Compiler Flow](./Code_Compiler_Flow.JPG)
+![Code Compiler Flow 2](./Code_Compiler_Flow_2.JPG)
 
 
 ## Further Improvements
