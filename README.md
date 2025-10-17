@@ -77,3 +77,12 @@ Starting the Server - with this command
 ## Project Flow
 
 ![Code Compiler Flow](./Code_Compiler_Flow.JPG)
+
+
+## Further Improvements
+
+1. Improve test generation prompts as per language. 
+2. Improve efficient input handling.
+3. Enhance Security Patterns.
+4. Rate limiting implementation for robust & real world production.
+5. Docker Containerization
