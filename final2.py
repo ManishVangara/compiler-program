@@ -645,7 +645,8 @@ def generate_test_cases_with_ai(code: str, language: str, provider_info: Dict) -
     
     system_prompt = """You are a test case generator. Generate 2-3 test cases for code.
 Return ONLY a valid JSON array, no markdown, no explanation.
-Format: [{"input":"value","expected_output":"value"}]
+Format: [{"input":"value","expected_output":"value"}] or 
+Format: [{"input":["value1","value2"],"expected_output":"value"}]
 If code has no input, use empty string."""
     
     user_prompt = f"""Generate test cases for this {language.upper()} code:
@@ -1057,7 +1058,39 @@ def get_languages():
         "languages": SUPPORTED_LANGUAGES
     }
 
+
+@app.get("/ai-provider")
+def get_ai_provider_info():
+    """Get current AI provider configuration"""
+    provider_info = AIProviderFactory.create_client()
+    
+    if provider_info:
+        return {
+            "status": "configured",
+            "provider": provider_info["type"],
+            "model": provider_info["model"],
+            "test_generation_enabled": True
+        }
+    else:
+        # Check which environment variables are missing
+        available_providers = []
+        if os.getenv("OPENAI_API_KEY"):
+            available_providers.append("OpenAI (API key set but client failed to initialize)")
+        if os.getenv("ANTHROPIC_API_KEY"):
+            available_providers.append("Anthropic (API key set but client failed to initialize)")
+        if os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY"):
+            available_providers.append("HuggingFace (Token set but client failed to initialize)")
+            
+        return {
+            "status": "not_configured",
+            "provider": None,
+            "model": None,
+            "test_generation_enabled": False,
+            "message": "No AI provider configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or HF_TOKEN",
+            "detected_keys": available_providers if available_providers else ["No API keys detected"]
+        }
+
 # ============= APPLICATION ENTRY POINT =============
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload = True)
