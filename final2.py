@@ -633,7 +633,7 @@ def run_once(cmd: List[str], temp_dir: str, language: str) -> dict:
 
 # ============= TEST CASE GENERATION =============
 def generate_test_cases_with_ai(code: str, language: str, provider_info: Dict) -> List[TestCase]:
-    """AI-powered test case generator with multi-provider support"""
+    """AI-powered test case generator with multi-provider support and enhanced validation"""
     if not provider_info:
         return []
     
@@ -643,24 +643,49 @@ def generate_test_cases_with_ai(code: str, language: str, provider_info: Dict) -
     
     print(f"Generating test cases using {provider_type} with model {model}...")
     
+    # IMPROVED SYSTEM PROMPT - More explicit about expected_output requirement
     system_prompt = """You are a test case generator. Generate 2-3 test cases for code.
 Return ONLY a valid JSON array, no markdown, no explanation.
 Format: [{"input":"value","expected_output":"value"}] or 
 Format: [{"input":["value1","value2"],"expected_output":"value"}]
-If code has no input, use empty string."""
+
+CRITICAL REQUIREMENTS:
+1. Every test case MUST have both 'input' AND 'expected_output'
+2. The expected_output must be the EXACT output the code will produce
+3. Calculate the expected output by mentally executing the code
+4. For code without input, use empty string "" for input but ALWAYS provide expected_output
+5. Expected output must be a string of what gets printed/returned
+
+Example: For code that prints squares 1 to n:
+- Input: "3" → Expected output: "1\\n4\\n9"
+- Input: "2" → Expected output: "1\\n4"
+
+If you cannot determine the expected output, do not generate that test case."""
     
+    # IMPROVED USER PROMPT - More explicit instructions
     user_prompt = f"""Generate test cases for this {language.upper()} code:
 ```{language}
 {code}
 ```
-Rules:
-- Return ONLY JSON array
-- Use simple realistic values
-- If multiple inputs: use array ["value1","value2", etc..] or separate by \n
-- No markdown, no code blocks
-JSON:"""
+
+IMPORTANT RULES:
+1. Return ONLY a JSON array - no markdown, no explanations, no code blocks
+2. Use simple, realistic input values
+3. For multiple inputs: use array format ["value1", "value2"] or newline-separated "value1\\nvalue2"
+4. CRITICAL: Calculate and include the EXACT expected_output for each test case
+5. The expected_output should be exactly what the code prints to stdout
+6. If the code has no input, use empty string for input
+7. Include 2-3 test cases maximum
+
+Format: [
+  {{"input": "test_input", "expected_output": "calculated_output"}},
+  {{"input": ["val1", "val2"], "expected_output": "calculated_output"}}
+]
+
+JSON Array:"""
     
     try:
+        # Call AI provider
         if provider_type == "openai":
             completion = client.chat.completions.create(
                 model=model,
@@ -668,20 +693,20 @@ JSON:"""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,
-                max_tokens=500,
+                temperature=0.2,  # Lower temperature for more consistent outputs
+                max_tokens=800,   # Increased token limit
             )
             content = completion.choices[0].message.content.strip()
         
         elif provider_type == "anthropic":
             message = client.messages.create(
                 model=model,
-                max_tokens=500,
+                max_tokens=800,
                 system=system_prompt,
                 messages=[
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,
+                temperature=0.2,
             )
             content = message.content[0].text.strip()
         
@@ -692,50 +717,86 @@ JSON:"""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,
-                max_tokens=500,
+                temperature=0.2,
+                max_tokens=800,
             )
             content = completion.choices[0].message.content.strip()
         
         else:
             return []
         
-        print(f"Response received ({len(content)} chars)")
+        # DEBUG: Show raw response
+        print(f"[DEBUG] AI response length: {len(content)} chars")
+        print(f"[DEBUG] Response preview: {content[:150]}...")
         
+        # Clean up response - remove markdown if present
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
         
+        # Extract JSON array
         json_match = re.search(r'\[[\s\S]*\]', content)
         if json_match:
             content = json_match.group(0)
         else:
+            print("[ERROR] No JSON array found in AI response")
             return []
         
+        # Parse JSON
         test_data = json.loads(content)
         
+        # DEBUG: Show parsed data
+        print(f"[DEBUG] Parsed {len(test_data)} test cases from AI")
+        
         if not isinstance(test_data, list):
+            print("[ERROR] AI response is not a JSON array")
             return []
         
+        # IMPROVED VALIDATION: Ensure all test cases have expected_output
         test_cases = []
-        for tc in test_data[:3]:
-            if isinstance(tc, dict):
-                test_cases.append(
-                    TestCase(
-                        input=str(tc.get("input", "")),
-                        expected_output=str(tc.get("expected_output", ""))
-                    )
+        for idx, tc in enumerate(test_data[:3], 1):
+            if not isinstance(tc, dict):
+                print(f"[WARNING] Test case {idx} is not a dict, skipping")
+                continue
+            
+            # Extract fields
+            input_data = tc.get("input", "")
+            expected_output = tc.get("expected_output", "")
+            
+            # CRITICAL VALIDATION: Check if expected_output exists and is not empty
+            if expected_output is None or str(expected_output).strip() == "":
+                print(f"[WARNING] Test case {idx} missing expected_output: {tc}")
+                print(f"[WARNING] Skipping test case without expected output")
+                continue
+            
+            # Convert expected_output to string
+            expected_output_str = str(expected_output).strip()
+            
+            # Create test case
+            test_cases.append(
+                TestCase(
+                    input=input_data,
+                    expected_output=expected_output_str
                 )
+            )
+            print(f"[DEBUG] Test case {idx}: input={input_data}, expected={expected_output_str[:50]}...")
         
-        print(f"Successfully generated {len(test_cases)} test cases")
+        if not test_cases:
+            print("[ERROR] No valid test cases generated (all missing expected_output)")
+            return []
+        
+        print(f"Successfully generated {len(test_cases)} valid test cases")
         return test_cases
     
     except json.JSONDecodeError as e:
-        print(f"JSON parsing failed: {e}")
+        print(f"[ERROR] JSON parsing failed: {e}")
+        print(f"[ERROR] Content: {content[:200]}...")
         return []
     except Exception as e:
-        print(f"Test generation failed: {str(e)}")
+        print(f"[ERROR] Test generation failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return []
 
 # ============= COMPILATION HANDLERS =============
@@ -1093,4 +1154,4 @@ def get_ai_provider_info():
 # ============= APPLICATION ENTRY POINT =============
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload = True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
