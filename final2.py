@@ -623,7 +623,7 @@ def run_once(cmd: List[str], temp_dir: str, language: str) -> dict:
         status = "runtime_error"
     
     return {
-        "stdout": result["stdout"],
+        "stdout": clean_output(result["stdout"]),
         "stderr": result["stderr"],
         "status": status,
         "time": f"{result['time_sec']}s",
