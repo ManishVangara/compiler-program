@@ -1,0 +1,424 @@
+{
+  "test_suite": {
+    "python": [
+      {
+        "variation": "1. Simple code with manual inputs",
+        "language": "python",
+        "code": "a = int(input())\nb = int(input())\nprint(a + b)",
+        "test_cases": [
+          {
+            "input": ["5", "3"],
+            "expected_output": "8"
+          },
+          {
+            "input": ["10", "20"],
+            "expected_output": "30"
+          },
+          {
+            "input": ["0", "0"],
+            "expected_output": "0"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "2. Simple code with auto-generate",
+        "language": "python",
+        "code": "n = int(input())\nfor i in range(1, n + 1):\n    print(i * i)",
+        "test_cases": [],
+        "auto_generate": true
+      },
+      {
+        "variation": "3. Complex palindrome checker",
+        "language": "python",
+        "code": "def is_palindrome(s):\n    s = s.lower().replace(' ', '')\n    return s == s[::-1]\n\ntext = input()\nif is_palindrome(text):\n    print('YES')\nelse:\n    print('NO')",
+        "test_cases": [
+          {
+            "input": "racecar",
+            "expected_output": "YES"
+          },
+          {
+            "input": "hello",
+            "expected_output": "NO"
+          },
+          {
+            "input": "A man a plan a canal Panama",
+            "expected_output": "YES"
+          },
+          {
+            "input": "python",
+            "expected_output": "NO"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "4. Complex Fibonacci with auto-generate",
+        "language": "python",
+        "code": "def fibonacci(n):\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        a, b = 0, 1\n        for _ in range(2, n + 1):\n            a, b = b, a + b\n        return b\n\nn = int(input())\nprint(fibonacci(n))",
+        "test_cases": [],
+        "auto_generate": true
+      }
+    ],
+    "java": [
+      {
+        "variation": "1. Simple code with manual inputs",
+        "language": "java",
+        "code": "import java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        int a = sc.nextInt();\n        int b = sc.nextInt();\n        System.out.println(a + b);\n        sc.close();\n    }\n}",
+        "test_cases": [
+          {
+            "input": ["7", "3"],
+            "expected_output": "10"
+          },
+          {
+            "input": ["15", "25"],
+            "expected_output": "40"
+          },
+          {
+            "input": ["0", "100"],
+            "expected_output": "100"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "2. Simple code with auto-generate",
+        "language": "java",
+        "code": "import java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        int n = sc.nextInt();\n        for (int i = 1; i <= n; i++) {\n            System.out.println(i * i * i);\n        }\n        sc.close();\n    }\n}",
+        "test_cases": [],
+        "auto_generate": true
+      },
+      {
+        "variation": "3. Complex palindrome checker",
+        "language": "java",
+        "code": "import java.util.Scanner;\n\npublic class Main {\n    public static boolean isPalindrome(String s) {\n        s = s.toLowerCase().replaceAll(\"\\\\s+\", \"\");\n        int left = 0, right = s.length() - 1;\n        while (left < right) {\n            if (s.charAt(left) != s.charAt(right)) {\n                return false;\n            }\n            left++;\n            right--;\n        }\n        return true;\n    }\n    \n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        String text = sc.nextLine();\n        if (isPalindrome(text)) {\n            System.out.println(\"YES\");\n        } else {\n            System.out.println(\"NO\");\n        }\n        sc.close();\n    }\n}",
+        "test_cases": [
+          {
+            "input": "madam",
+            "expected_output": "YES"
+          },
+          {
+            "input": "java",
+            "expected_output": "NO"
+          },
+          {
+            "input": "Was it a car or a cat I saw",
+            "expected_output": "YES"
+          },
+          {
+            "input": "programming",
+            "expected_output": "NO"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "4. Complex prime checker with auto-generate",
+        "language": "java",
+        "code": "import java.util.Scanner;\n\npublic class Main {\n    public static boolean isPrime(int n) {\n        if (n <= 1) return false;\n        if (n <= 3) return true;\n        if (n % 2 == 0 || n % 3 == 0) return false;\n        for (int i = 5; i * i <= n; i += 6) {\n            if (n % i == 0 || n % (i + 2) == 0) {\n                return false;\n            }\n        }\n        return true;\n    }\n    \n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        int n = sc.nextInt();\n        if (isPrime(n)) {\n            System.out.println(\"PRIME\");\n        } else {\n            System.out.println(\"NOT PRIME\");\n        }\n        sc.close();\n    }\n}",
+        "test_cases": [],
+        "auto_generate": true
+      }
+    ],
+    "c": [
+      {
+        "variation": "1. Simple code with manual inputs",
+        "language": "c",
+        "code": "#include <stdio.h>\n\nint main() {\n    int a, b;\n    scanf(\"%d\", &a);\n    scanf(\"%d\", &b);\n    printf(\"%d\\n\", a * b);\n    return 0;\n}",
+        "test_cases": [
+          {
+            "input": ["4", "5"],
+            "expected_output": "20"
+          },
+          {
+            "input": ["7", "8"],
+            "expected_output": "56"
+          },
+          {
+            "input": ["0", "100"],
+            "expected_output": "0"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "2. Simple code with auto-generate",
+        "language": "c",
+        "code": "#include <stdio.h>\n\nint main() {\n    int n;\n    scanf(\"%d\", &n);\n    for (int i = 1; i <= n; i++) {\n        printf(\"%d\\n\", i * 2);\n    }\n    return 0;\n}",
+        "test_cases": [],
+        "auto_generate": true
+      },
+      {
+        "variation": "3. Complex palindrome number checker",
+        "language": "c",
+        "code": "#include <stdio.h>\n\nint isPalindromeNumber(int n) {\n    int original = n, reversed = 0, remainder;\n    while (n != 0) {\n        remainder = n % 10;\n        reversed = reversed * 10 + remainder;\n        n /= 10;\n    }\n    return original == reversed;\n}\n\nint main() {\n    int num;\n    scanf(\"%d\", &num);\n    if (isPalindromeNumber(num)) {\n        printf(\"YES\\n\");\n    } else {\n        printf(\"NO\\n\");\n    }\n    return 0;\n}",
+        "test_cases": [
+          {
+            "input": "121",
+            "expected_output": "YES"
+          },
+          {
+            "input": "123",
+            "expected_output": "NO"
+          },
+          {
+            "input": "12321",
+            "expected_output": "YES"
+          },
+          {
+            "input": "1000",
+            "expected_output": "NO"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "4. Complex factorial with auto-generate",
+        "language": "c",
+        "code": "#include <stdio.h>\n\nlong long factorial(int n) {\n    if (n <= 1) return 1;\n    long long result = 1;\n    for (int i = 2; i <= n; i++) {\n        result *= i;\n    }\n    return result;\n}\n\nint main() {\n    int n;\n    scanf(\"%d\", &n);\n    printf(\"%lld\\n\", factorial(n));\n    return 0;\n}",
+        "test_cases": [],
+        "auto_generate": true
+      }
+    ],
+    "cpp": [
+      {
+        "variation": "1. Simple code with manual inputs",
+        "language": "cpp",
+        "code": "#include <iostream>\nusing namespace std;\n\nint main() {\n    int a, b;\n    cin >> a >> b;\n    cout << a - b << endl;\n    return 0;\n}",
+        "test_cases": [
+          {
+            "input": ["10", "3"],
+            "expected_output": "7"
+          },
+          {
+            "input": ["50", "25"],
+            "expected_output": "25"
+          },
+          {
+            "input": ["100", "100"],
+            "expected_output": "0"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "2. Simple code with auto-generate",
+        "language": "cpp",
+        "code": "#include <iostream>\nusing namespace std;\n\nint main() {\n    int n;\n    cin >> n;\n    for (int i = 1; i <= n; i++) {\n        cout << i * i << endl;\n    }\n    return 0;\n}",
+        "test_cases": [],
+        "auto_generate": true
+      },
+      {
+        "variation": "3. Complex palindrome string checker",
+        "language": "cpp",
+        "code": "#include <iostream>\n#include <string>\n#include <algorithm>\nusing namespace std;\n\nbool isPalindrome(string s) {\n    transform(s.begin(), s.end(), s.begin(), ::tolower);\n    s.erase(remove(s.begin(), s.end(), ' '), s.end());\n    string reversed = s;\n    reverse(reversed.begin(), reversed.end());\n    return s == reversed;\n}\n\nint main() {\n    string text;\n    getline(cin, text);\n    if (isPalindrome(text)) {\n        cout << \"YES\" << endl;\n    } else {\n        cout << \"NO\" << endl;\n    }\n    return 0;\n}",
+        "test_cases": [
+          {
+            "input": "level",
+            "expected_output": "YES"
+          },
+          {
+            "input": "world",
+            "expected_output": "NO"
+          },
+          {
+            "input": "A Santa at NASA",
+            "expected_output": "YES"
+          },
+          {
+            "input": "coding",
+            "expected_output": "NO"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "4. Complex GCD calculator with auto-generate",
+        "language": "cpp",
+        "code": "#include <iostream>\nusing namespace std;\n\nint gcd(int a, int b) {\n    while (b != 0) {\n        int temp = b;\n        b = a % b;\n        a = temp;\n    }\n    return a;\n}\n\nint main() {\n    int a, b;\n    cin >> a >> b;\n    cout << gcd(a, b) << endl;\n    return 0;\n}",
+        "test_cases": [],
+        "auto_generate": true
+      }
+    ],
+    "javascript": [
+      {
+        "variation": "1. Simple code with manual inputs",
+        "language": "javascript",
+        "code": "const readline = require('readline');\nconst rl = readline.createInterface({\n    input: process.stdin,\n    output: process.stdout\n});\n\nlet lines = [];\nrl.on('line', (line) => {\n    lines.push(line);\n    if (lines.length === 2) {\n        const a = parseInt(lines[0]);\n        const b = parseInt(lines[1]);\n        console.log(a + b);\n        rl.close();\n    }\n});",
+        "test_cases": [
+          {
+            "input": ["12", "8"],
+            "expected_output": "20"
+          },
+          {
+            "input": ["30", "15"],
+            "expected_output": "45"
+          },
+          {
+            "input": ["0", "0"],
+            "expected_output": "0"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "2. Simple code with auto-generate",
+        "language": "javascript",
+        "code": "const readline = require('readline');\nconst rl = readline.createInterface({\n    input: process.stdin,\n    output: process.stdout\n});\n\nrl.on('line', (line) => {\n    const n = parseInt(line);\n    for (let i = 1; i <= n; i++) {\n        console.log(i * 3);\n    }\n    rl.close();\n});",
+        "test_cases": [],
+        "auto_generate": true
+      },
+      {
+        "variation": "3. Complex palindrome checker",
+        "language": "javascript",
+        "code": "const readline = require('readline');\nconst rl = readline.createInterface({\n    input: process.stdin,\n    output: process.stdout\n});\n\nfunction isPalindrome(s) {\n    s = s.toLowerCase().replace(/\\s+/g, '');\n    const reversed = s.split('').reverse().join('');\n    return s === reversed;\n}\n\nrl.on('line', (line) => {\n    if (isPalindrome(line)) {\n        console.log('YES');\n    } else {\n        console.log('NO');\n    }\n    rl.close();\n});",
+        "test_cases": [
+          {
+            "input": "noon",
+            "expected_output": "YES"
+          },
+          {
+            "input": "javascript",
+            "expected_output": "NO"
+          },
+          {
+            "input": "Never odd or even",
+            "expected_output": "YES"
+          },
+          {
+            "input": "coding challenge",
+            "expected_output": "NO"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "4. Complex array sum with auto-generate",
+        "language": "javascript",
+        "code": "const readline = require('readline');\nconst rl = readline.createInterface({\n    input: process.stdin,\n    output: process.stdout\n});\n\nlet lines = [];\nrl.on('line', (line) => {\n    lines.push(line);\n    if (lines.length === 2) {\n        const n = parseInt(lines[0]);\n        const arr = lines[1].split(' ').map(Number);\n        const sum = arr.reduce((acc, val) => acc + val, 0);\n        console.log(sum);\n        rl.close();\n    }\n});",
+        "test_cases": [],
+        "auto_generate": true
+      }
+    ],
+    "perl": [
+      {
+        "variation": "1. Simple code with manual inputs",
+        "language": "perl",
+        "code": "use strict;\nuse warnings;\n\nmy $a = <STDIN>;\nmy $b = <STDIN>;\nchomp($a, $b);\nprint $a + $b, \"\\n\";",
+        "test_cases": [
+          {
+            "input": ["6", "4"],
+            "expected_output": "10"
+          },
+          {
+            "input": ["20", "30"],
+            "expected_output": "50"
+          },
+          {
+            "input": ["0", "5"],
+            "expected_output": "5"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "2. Simple code with auto-generate",
+        "language": "perl",
+        "code": "use strict;\nuse warnings;\n\nmy $n = <STDIN>;\nchomp($n);\nfor (my $i = 1; $i <= $n; $i++) {\n    print $i * $i, \"\\n\";\n}",
+        "test_cases": [],
+        "auto_generate": true
+      },
+      {
+        "variation": "3. Complex palindrome checker",
+        "language": "perl",
+        "code": "use strict;\nuse warnings;\n\nsub is_palindrome {\n    my $s = shift;\n    $s = lc($s);\n    $s =~ s/\\s+//g;\n    my $reversed = reverse($s);\n    return $s eq $reversed;\n}\n\nmy $text = <STDIN>;\nchomp($text);\nif (is_palindrome($text)) {\n    print \"YES\\n\";\n} else {\n    print \"NO\\n\";\n}",
+        "test_cases": [
+          {
+            "input": "radar",
+            "expected_output": "YES"
+          },
+          {
+            "input": "perl",
+            "expected_output": "NO"
+          },
+          {
+            "input": "A man a plan a canal Panama",
+            "expected_output": "YES"
+          },
+          {
+            "input": "script",
+            "expected_output": "NO"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "4. Complex even/odd counter with auto-generate",
+        "language": "perl",
+        "code": "use strict;\nuse warnings;\n\nmy $n = <STDIN>;\nchomp($n);\nmy $line = <STDIN>;\nchomp($line);\nmy @numbers = split(' ', $line);\nmy $even_count = 0;\nmy $odd_count = 0;\n\nforeach my $num (@numbers) {\n    if ($num % 2 == 0) {\n        $even_count++;\n    } else {\n        $odd_count++;\n    }\n}\n\nprint \"Even: $even_count, Odd: $odd_count\\n\";",
+        "test_cases": [],
+        "auto_generate": true
+      }
+    ],
+    "go": [
+      {
+        "variation": "1. Simple code with manual inputs",
+        "language": "go",
+        "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n    var a, b int\n    fmt.Scan(&a)\n    fmt.Scan(&b)\n    fmt.Println(a + b)\n}",
+        "test_cases": [
+          {
+            "input": ["9", "11"],
+            "expected_output": "20"
+          },
+          {
+            "input": ["25", "25"],
+            "expected_output": "50"
+          },
+          {
+            "input": ["0", "42"],
+            "expected_output": "42"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "2. Simple code with auto-generate",
+        "language": "go",
+        "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n    var n int\n    fmt.Scan(&n)\n    for i := 1; i <= n; i++ {\n        fmt.Println(i * i)\n    }\n}",
+        "test_cases": [],
+        "auto_generate": true
+      },
+      {
+        "variation": "3. Complex palindrome checker",
+        "language": "go",
+        "code": "package main\n\nimport (\n    \"bufio\"\n    \"fmt\"\n    \"os\"\n    \"strings\"\n)\n\nfunc isPalindrome(s string) bool {\n    s = strings.ToLower(s)\n    s = strings.ReplaceAll(s, \" \", \"\")\n    runes := []rune(s)\n    for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {\n        if runes[i] != runes[j] {\n            return false\n        }\n    }\n    return true\n}\n\nfunc main() {\n    reader := bufio.NewReader(os.Stdin)\n    text, _ := reader.ReadString('\\n')\n    text = strings.TrimSpace(text)\n    if isPalindrome(text) {\n        fmt.Println(\"YES\")\n    } else {\n        fmt.Println(\"NO\")\n    }\n}",
+        "test_cases": [
+          {
+            "input": "rotor",
+            "expected_output": "YES"
+          },
+          {
+            "input": "golang",
+            "expected_output": "NO"
+          },
+          {
+            "input": "Do geese see God",
+            "expected_output": "YES"
+          },
+          {
+            "input": "programming",
+            "expected_output": "NO"
+          }
+        ],
+        "auto_generate": false
+      },
+      {
+        "variation": "4. Complex sum of digits with auto-generate",
+        "language": "go",
+        "code": "package main\n\nimport \"fmt\"\n\nfunc sumOfDigits(n int) int {\n    sum := 0\n    for n > 0 {\n        sum += n % 10\n        n /= 10\n    }\n    return sum\n}\n\nfunc main() {\n    var n int\n    fmt.Scan(&n)\n    fmt.Println(sumOfDigits(n))\n}",
+        "test_cases": [],
+        "auto_generate": true
+      }
+    ]
+  }
+}
